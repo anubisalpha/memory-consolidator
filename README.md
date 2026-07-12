@@ -5,7 +5,11 @@ files (frontmatter + `MEMORY.md` index) and reports consolidation
 opportunities — duplicates, stale entries, broken links, index drift.
 
 No model inference — all checks are programmatic (string/heuristic based),
-so it runs the same way every time and costs nothing to run.
+so it runs the same way every time and costs nothing to run. Everything is
+pure `pathlib`/stdlib and works identically on Windows, macOS, and Linux —
+snapshot zip archives use portable (forward-slash) paths internally so a
+backup taken on one OS restores correctly on another, and `rules.md` paths
+accept forward slashes everywhere including Windows.
 
 ## Recommended workflow
 
@@ -116,6 +120,25 @@ auto-detects/prompts on first run and saves the confirmed path to
 `config.local.json` (gitignored, machine-specific, keyed per area name) so
 it isn't asked again. See [`config.local.example.json`](config.local.example.json)
 for the format if you want to set it up manually instead.
+
+### Convenience scripts
+
+[`scripts/`](scripts/) wraps the common commands for macOS/Linux (`.sh`) and
+Windows (`.bat`) — same behavior either way, no `python`/`python3` guessing
+required (each `.sh` probes `python3`, `python`, then `py` and uses whichever
+actually runs, not just whichever is first on `PATH`):
+
+```bash
+scripts/setup.sh                 # scripts\setup.bat    — pip install deps
+scripts/audit.sh [area]          # scripts\audit.bat [area]   — omit area for all
+scripts/review.sh <area>         # scripts\review.bat <area> — interactive
+scripts/map.sh <area>            # scripts\map.bat <area>
+scripts/test.sh                  # scripts\test.bat     — run the pytest suite
+```
+
+The `.sh` scripts are `cd`-independent (they resolve their own location and
+`cd` into the project root first), so they can be run from anywhere or
+symlinked onto `PATH`.
 
 ## Configuration
 

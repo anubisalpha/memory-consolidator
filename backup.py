@@ -32,7 +32,10 @@ def create_snapshot(memory_root: Path, backup_dir: Path, reason: str) -> Path:
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in memory_root.rglob("*"):
             if f.is_file():
-                zf.write(f, arcname=f.relative_to(memory_root))
+                # as_posix(): zip archives always use forward slashes internally
+                # regardless of platform, so a snapshot taken on Windows can be
+                # correctly restored on macOS/Linux and vice versa.
+                zf.write(f, arcname=f.relative_to(memory_root).as_posix())
 
     manifest = _load_manifest(backup_dir)
     manifest.append({

@@ -11,10 +11,24 @@ PROJECT_DIR = Path(__file__).resolve().parent
 RULES_PATH = PROJECT_DIR / "rules.md"
 CONFIG_PATH = PROJECT_DIR / "config.local.json"
 
-DEFAULT_GUESS_CANDIDATES = [
-    Path.home() / ".claude" / "projects" / "C--Users-marca-claudecore" / "memory",
-    PROJECT_DIR.parent.parent / "memory",
-]
+
+def _claude_project_slug(path: Path) -> str:
+    """Best-effort reconstruction of Claude Code's session-storage folder
+    naming convention: a project's absolute path with separators (and the
+    drive letter's colon, on Windows) replaced by dashes. Works for any
+    user/home directory on any OS — this is only ever used as a guess with
+    an interactive prompt as the fallback, so it doesn't need to be exact."""
+    resolved = str(path.resolve())
+    return resolved.replace(":", "").replace("\\", "-").replace("/", "-")
+
+
+def _default_guess_candidates() -> list[Path]:
+    claudecore_root = PROJECT_DIR.parent.parent  # projects/memory-consolidator -> claudecore
+    slug = _claude_project_slug(claudecore_root)
+    return [
+        Path.home() / ".claude" / "projects" / slug / "memory",
+        claudecore_root / "memory",
+    ]
 
 
 @dataclass
@@ -43,7 +57,7 @@ def save_local_config(cfg: dict) -> None:
 
 
 def guess_memory_root() -> Path | None:
-    for candidate in DEFAULT_GUESS_CANDIDATES:
+    for candidate in _default_guess_candidates():
         if candidate.exists() and candidate.is_dir():
             return candidate
     return None
@@ -119,8 +133,7 @@ def get_config(non_interactive: bool = False) -> dict:
     report_dir = Path(rules["paths"]["report_dir"])
 
     for area in areas:
-        backup_inside_root = str(backup_dir).startswith(str(area.root) + str(Path("/"))) \
-            or str(backup_dir) == str(area.root)
+        backup_inside_root = backup_dir == area.root or backup_dir.is_relative_to(area.root)
         if backup_inside_root:
             if rules["automation"]["mode"] != "report_only":
                 print(f"ERROR: backup_dir resolves inside area '{area.name}' root and "
