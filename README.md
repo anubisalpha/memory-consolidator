@@ -21,6 +21,8 @@ python main.py rollback --which latest   # restore from a snapshot
 On first run it will try to auto-detect your memory folder and ask you to
 confirm or override the path. The chosen path is saved to
 `config.local.json` (gitignored, machine-specific) so it isn't asked again.
+See [`config.local.example.json`](config.local.example.json) for the format
+if you want to set it up manually instead.
 
 ## Configuration
 
