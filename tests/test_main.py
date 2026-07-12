@@ -292,6 +292,30 @@ def test_cmd_dry_run_skips_scoped_areas(tmp_path, monkeypatch, capsys):
     assert "dry-run only applies to 'full' mode" in capsys.readouterr().out
 
 
+def test_cmd_dry_run_blocked_when_backup_dir_inside_area_root(tmp_path, monkeypatch, capsys):
+    """Regression test for a confirmed severe bug: without this guard,
+    create_dry_run_copy would copy the area into a staging dir nested
+    inside the very area being copied, recursing until the OS refuses
+    (hit Windows' path-length limit after ~9 levels of self-nesting in
+    manual reproduction)."""
+    root = tmp_path / "project"
+    root.mkdir()
+    write_memory_file(root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    area = ResolvedArea("proj", root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "report_only", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    rules["paths"]["backup_dir"] = str(root / "backups")
+    (root / "backups").mkdir()
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    with pytest.raises(SystemExit):
+        main.cmd_dry_run(ns())
+    assert "resolves inside area 'proj'" in capsys.readouterr().err
+
+
 def test_cmd_dry_run_repeated_runs_dont_accumulate(memory_root, tmp_path, monkeypatch):
     write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
     area = ResolvedArea("main", memory_root, "full")

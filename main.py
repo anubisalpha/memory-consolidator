@@ -125,6 +125,7 @@ def cmd_dry_run(args) -> None:
         return
 
     backup_dir = Path(rules["paths"]["backup_dir"])
+    ensure_backup_safe_for_area(area, backup_dir)
     staging_dir = backup_dir / f"dryrun_{area.name}"
     create_dry_run_copy(area.root, staging_dir)
     print(f"Copied area '{area.name}' ({area.root}) to disposable staging copy:\n  {staging_dir}\n")

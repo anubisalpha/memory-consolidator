@@ -1,6 +1,20 @@
+import pytest
+
 from dryrun import create_dry_run_copy, diff_memory_index
 
 from .conftest import write_index, write_memory_file
+
+
+def test_create_dry_run_copy_rejects_staging_dir_inside_area_root(memory_root):
+    write_memory_file(memory_root, "a.md", "a", "desc", "user", "body")
+    staging_dir = memory_root / "backups" / "dryrun_x"  # inside area_root
+    with pytest.raises(ValueError, match="inside area_root"):
+        create_dry_run_copy(memory_root, staging_dir)
+
+
+def test_create_dry_run_copy_rejects_staging_dir_equal_to_area_root(memory_root):
+    with pytest.raises(ValueError, match="inside area_root"):
+        create_dry_run_copy(memory_root, memory_root)
 
 
 def test_create_dry_run_copy_mirrors_content(memory_root, tmp_path):

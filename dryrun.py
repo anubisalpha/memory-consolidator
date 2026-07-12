@@ -8,7 +8,22 @@ from pathlib import Path
 
 def create_dry_run_copy(area_root: Path, staging_dir: Path) -> Path:
     """Copies area_root into staging_dir, replacing any previous dry-run
-    copy at that path so repeated runs don't accumulate stale copies."""
+    copy at that path so repeated runs don't accumulate stale copies.
+
+    Defense in depth: refuses if staging_dir is inside area_root. The
+    normal caller (main.py's cmd_dry_run) already checks this via
+    ensure_backup_safe_for_area before calling here, but this function is
+    reusable and shouldn't rely solely on that — copying a directory into
+    a subdirectory of itself recurses until the OS refuses (confirmed: hits
+    Windows' path-length limit after a few hundred levels of self-nesting)."""
+    area_root = area_root.resolve()
+    staging_dir = staging_dir.resolve()
+    if staging_dir == area_root or staging_dir.is_relative_to(area_root):
+        raise ValueError(
+            f"staging_dir ({staging_dir}) is inside area_root ({area_root}) — "
+            "would recurse copying the folder into itself"
+        )
+
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     shutil.copytree(area_root, staging_dir)
