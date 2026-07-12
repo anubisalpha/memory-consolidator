@@ -1,5 +1,6 @@
 # Memory Consolidator
 
+[![tests](https://github.com/anubisalpha/memory-consolidator/actions/workflows/tests.yml/badge.svg)](https://github.com/anubisalpha/memory-consolidator/actions/workflows/tests.yml)
 [MIT licensed](LICENSE)
 
 A portable, deterministic Python tool that audits a folder of Claude memory
@@ -173,7 +174,8 @@ edit the YAML block there, no code changes needed.
 | `backup.py` | Snapshot/rollback, isolated from area roots |
 | `report.py` | Console + markdown report rendering, one report per area |
 | `rules.md` | Area list, user-tunable thresholds, automation mode |
-| `tests/` | pytest suite — all tests run against `tmp_path`, never your real memory folder |
+| `tests/` | pytest suite (incl. CLI-level `main.py` coverage) — all tests run against `tmp_path`, never your real memory folder |
+| `.github/workflows/tests.yml` | CI: runs the suite on push/PR across Ubuntu/Windows/macOS × Python 3.11/3.12 |
 
 ## Tests
 
