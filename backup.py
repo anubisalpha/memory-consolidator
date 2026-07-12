@@ -22,7 +22,12 @@ def _save_manifest(backup_dir: Path, manifest: list[dict]) -> None:
 
 
 def create_snapshot(memory_root: Path, backup_dir: Path, reason: str) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    base_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    timestamp = base_timestamp
+    suffix = 1
+    while (backup_dir / f"{timestamp}.zip").exists():
+        suffix += 1
+        timestamp = f"{base_timestamp}-{suffix}"
     zip_path = backup_dir / f"{timestamp}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in memory_root.rglob("*"):

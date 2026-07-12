@@ -16,6 +16,8 @@ python main.py audit              # scan, print findings, write reports/audit_*.
 python main.py snapshot           # manually back up the memory folder
 python main.py list-snapshots     # list recorded snapshots
 python main.py rollback --which latest   # restore from a snapshot
+python main.py init                      # bootstrap MEMORY.md + reference card on a fresh machine
+python main.py new-memory --type feedback --slug my-slug --description "..."  # scaffold a compliant file
 ```
 
 On first run it will try to auto-detect your memory folder and ask you to
@@ -45,7 +47,16 @@ no code changes needed.
 | `main.py` | CLI entrypoint |
 | `config.py` | Locate/persist memory root, load `rules.md` |
 | `scanner.py` | Parse frontmatter + `MEMORY.md` index |
-| `checks.py` | All audit checks |
+| `checks.py` | All audit checks + compliance score |
+| `templates.py` | Fresh-machine bootstrap + compliant file scaffolding |
 | `backup.py` | Snapshot/rollback, isolated from memory root |
 | `report.py` | Console + markdown report rendering |
 | `rules.md` | User-tunable thresholds and automation mode |
+| `tests/` | pytest suite — all tests run against `tmp_path`, never your real memory folder |
+
+## Tests
+
+```bash
+pip install pytest
+python -m pytest tests/ -q
+```
