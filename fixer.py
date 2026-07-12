@@ -29,6 +29,15 @@ def add_missing_index_entries(area_root: Path, files: list[MemoryFile],
     index_path = area_root / "MEMORY.md"
     if not index_path.exists():
         index_path.write_text("# Memory Index\n\n", encoding="utf-8")
+    elif index_path.stat().st_size > 0:
+        existing = index_path.read_text(encoding="utf-8")
+        if not existing.endswith("\n"):
+            # Appending in "a" mode is a raw byte append — without this, a
+            # file saved without a trailing newline would get the new entry
+            # concatenated onto the end of the last existing line, silently
+            # merging two index entries into one broken line.
+            with index_path.open("a", encoding="utf-8") as fh:
+                fh.write("\n")
 
     actions = []
     with index_path.open("a", encoding="utf-8") as fh:

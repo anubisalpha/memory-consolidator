@@ -194,6 +194,14 @@ def test_check_staleness_probably_dead(memory_root, rules):
     assert any(f.category == "stale" and "probably stale" in f.message for f in findings)
 
 
+def test_check_staleness_invalid_calendar_date_does_not_crash(memory_root, rules):
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",
+                       "Version bumped in build 2026-13-40 for release.")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_staleness(files, rules)  # must not raise ValueError
+    assert not any(f.category == "stale" for f in findings)
+
+
 def test_check_staleness_recent_not_flagged(memory_root, rules):
     recent_date = datetime.now().strftime("%Y-%m-%d")
     write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",

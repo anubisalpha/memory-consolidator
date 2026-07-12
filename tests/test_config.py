@@ -9,6 +9,7 @@ from config import (
     derive_workspace_root,
     ensure_backup_safe_for_area,
     get_config,
+    resolve_areas,
 )
 
 
@@ -199,3 +200,35 @@ def test_get_config_respects_explicit_workspace_root_override(tmp_path, monkeypa
 
     rules = get_config(non_interactive=True)
     assert Path(rules["external_scan"]["workspace_root"]) == override_dir
+
+
+# ---- duplicate area names ----
+
+def test_resolve_areas_rejects_duplicate_names(tmp_path):
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    rules = {
+        "areas": [
+            {"name": "dup", "root": str(root_a), "mode": "full"},
+            {"name": "dup", "root": str(root_b), "mode": "scoped"},
+        ]
+    }
+    with pytest.raises(ValueError, match="duplicate area name"):
+        resolve_areas(rules, non_interactive=True)
+
+
+def test_resolve_areas_allows_unique_names(tmp_path):
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    rules = {
+        "areas": [
+            {"name": "one", "root": str(root_a), "mode": "full"},
+            {"name": "two", "root": str(root_b), "mode": "scoped"},
+        ]
+    }
+    areas = resolve_areas(rules, non_interactive=True)
+    assert [a.name for a in areas] == ["one", "two"]

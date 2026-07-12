@@ -104,6 +104,16 @@ def _resolve_null_root(area_name: str, non_interactive: bool) -> Path:
 
 def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedArea]:
     areas_cfg = rules.get("areas") or []
+
+    names = [entry["name"] for entry in areas_cfg]
+    duplicates = {n for n in names if names.count(n) > 1}
+    if duplicates:
+        raise ValueError(
+            f"duplicate area name(s) in rules.md: {sorted(duplicates)} — area names must be "
+            "unique (commands select an area by name, and --area-scoped filtering assumes "
+            "at most one match)"
+        )
+
     resolved = []
     for entry in areas_cfg:
         name = entry["name"]

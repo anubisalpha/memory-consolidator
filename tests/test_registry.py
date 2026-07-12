@@ -60,3 +60,16 @@ def test_registry_persists_to_disk(isolated_registry):
     registry.record_decision("area1", "a.md", "ignore", "note")
     raw = json.loads(isolated_registry.read_text(encoding="utf-8"))
     assert raw["decisions"][0]["rel_path"] == "a.md"
+
+
+def test_remove_decision_matches_backslash_input(isolated_registry):
+    registry.record_decision("area1", "sub/file.md", "ignore", "note")
+    removed = registry.remove_decision("area1", r"sub\file.md")
+    assert removed is True
+    assert registry.load_decisions("area1") == []
+
+
+def test_record_decision_normalizes_backslash_input(isolated_registry):
+    registry.record_decision("area1", r"sub\file.md", "ignore", "note")
+    decisions = registry.load_decisions("area1")
+    assert decisions[0].rel_path == "sub/file.md"

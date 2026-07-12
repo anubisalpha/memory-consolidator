@@ -220,7 +220,13 @@ def check_staleness(files: list[MemoryFile], rules: dict) -> list[Finding]:
     for f in files:
         if f.parse_error or f.mem_type not in ("project", "feedback"):
             continue
-        dates_found = [date(int(y), int(m), int(d)) for y, m, d in DATE_RE.findall(f.body)]
+        dates_found = []
+        for y, m, d in DATE_RE.findall(f.body):
+            try:
+                dates_found.append(date(int(y), int(m), int(d)))
+            except ValueError:
+                continue  # matches \d{4}-\d{2}-\d{2} but isn't a real calendar date
+                          # (e.g. a version string like 2026-13-40) — not our concern here
         past_dates = [d for d in dates_found if d < today]
         if not past_dates:
             continue

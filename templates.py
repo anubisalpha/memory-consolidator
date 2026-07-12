@@ -87,6 +87,8 @@ def scaffold_memory_file(memory_root: Path, mem_type: str, slug: str, descriptio
         raise ValueError(f"invalid type: {mem_type}")
 
     slug = slugify(slug)
+    if not slug:
+        raise ValueError("slug produced an empty filename after normalization — use at least one letter or digit")
     path = memory_root / f"{slug}.md"
     if path.exists():
         raise FileExistsError(f"{path} already exists")

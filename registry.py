@@ -15,6 +15,14 @@ REGISTRY_PATH = Path(__file__).resolve().parent / "review_decisions.json"
 VALID_DECISIONS = {"custom_format", "ignore"}
 
 
+def _normalize_rel_path(rel_path: str) -> str:
+    """Registry keys are always POSIX (forward-slash), but a user typing a
+    path by hand on Windows naturally uses backslashes (e.g. copy-pasted
+    from Explorer or tab-completed in cmd.exe) — normalize so that still
+    matches."""
+    return rel_path.replace("\\", "/")
+
+
 @dataclass
 class Decision:
     area: str
@@ -50,6 +58,7 @@ def decision_map(area_name: str) -> dict[str, Decision]:
 def record_decision(area: str, rel_path: str, decision: str, note: str) -> None:
     if decision not in VALID_DECISIONS:
         raise ValueError(f"invalid decision '{decision}', must be one of {VALID_DECISIONS}")
+    rel_path = _normalize_rel_path(rel_path)
     raw = _load_raw()
     raw = [d for d in raw if not (d["area"] == area and d["rel_path"] == rel_path)]
     raw.append(asdict(Decision(
@@ -60,6 +69,7 @@ def record_decision(area: str, rel_path: str, decision: str, note: str) -> None:
 
 
 def remove_decision(area: str, rel_path: str) -> bool:
+    rel_path = _normalize_rel_path(rel_path)
     raw = _load_raw()
     filtered = [d for d in raw if not (d["area"] == area and d["rel_path"] == rel_path)]
     changed = len(filtered) != len(raw)

@@ -21,6 +21,21 @@ def test_add_missing_index_entries_appends_only(memory_root):
     assert any("already indexed" in line for line in new_lines)
 
 
+def test_add_missing_index_entries_no_trailing_newline_does_not_corrupt(memory_root):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    # simulate a hand-edited/generated MEMORY.md with no trailing newline
+    (memory_root / "MEMORY.md").write_bytes(b"# Memory Index\n\n- [A](a.md) - hook")
+
+    files = scan_memory_files(memory_root)
+    index_entries, _ = parse_index(memory_root)
+    add_missing_index_entries(memory_root, files, index_entries)
+
+    content = (memory_root / "MEMORY.md").read_text(encoding="utf-8")
+    assert "hook- [" not in content  # the two entries must not be merged onto one line
+    lines = [line for line in content.splitlines() if line.startswith("- [")]
+    assert len(lines) == 2
+
+
 def test_add_missing_index_entries_skips_malformed(memory_root):
     (memory_root / "bad.md").write_text("no frontmatter", encoding="utf-8")
     files = scan_memory_files(memory_root)

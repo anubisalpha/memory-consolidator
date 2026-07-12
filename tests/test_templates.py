@@ -46,3 +46,9 @@ def test_scaffold_memory_file_existing_raises(memory_root):
     scaffold_memory_file(memory_root, "user", "dup-slug", "desc")
     with pytest.raises(FileExistsError):
         scaffold_memory_file(memory_root, "user", "dup-slug", "desc")
+
+
+def test_scaffold_memory_file_empty_slug_raises(memory_root):
+    with pytest.raises(ValueError, match="empty filename"):
+        scaffold_memory_file(memory_root, "user", "!!!...???", "desc")
+    assert not any(memory_root.iterdir())
