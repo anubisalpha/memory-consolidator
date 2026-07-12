@@ -4,7 +4,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from backup import create_snapshot, list_snapshots, rollback
+from backup import create_snapshot, create_targeted_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
 from consolidate import write_canonical_file, write_pointer_stub
@@ -301,8 +301,20 @@ def cmd_resolve_conflicts(args) -> None:
     involved = [a for a in areas if a.name in involved_names]
     for area in involved:
         ensure_backup_safe_for_area(area, backup_dir)
+
+    # Targeted, not whole-area: a 'scoped' area's root is a whole
+    # project/workspace (potentially huge) — resolve-conflicts only ever
+    # touches the specific files involved in a conflict, so back up just
+    # those rather than the entire tree (see create_targeted_snapshot).
+    area_touched_files: dict[str, set[Path]] = {}
+    for finding in critical:
+        area_touched_files.setdefault(finding.area_a, set()).add(Path(finding.ref_a))
+        area_touched_files.setdefault(finding.area_b, set()).add(Path(finding.ref_b))
     for area in involved:
-        create_snapshot(area.root, backup_dir, reason=f"pre-resolve-conflicts [{area.name}]")
+        touched = sorted(area_touched_files.get(area.name, set()))
+        if touched:
+            create_targeted_snapshot(touched, area.root, backup_dir,
+                                      reason=f"pre-resolve-conflicts [{area.name}]")
     print(f"Snapshotted {len(involved)} area(s) before resolving: {', '.join(a.name for a in involved)}\n")
 
     file_lookup = {}

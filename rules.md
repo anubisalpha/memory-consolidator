@@ -6,8 +6,13 @@ any AI context window; it is only read by `main.py`.
 
 ```yaml
 paths:
-  backup_dir: "./backups"    # relative to this rules.md — must never be inside any area's root
-  report_dir: "./reports"    # relative to this rules.md
+  # Absolute, outside claudecore entirely — claudecore-project's root IS the
+  # whole claudecore tree, so anything under "./backups" (relative to this
+  # rules.md, which lives inside claudecore) always conflicted with that
+  # area's write safety check. Moved out once so apply_safe_fixes/
+  # resolve-conflicts/rollback can actually run against claudecore-project.
+  backup_dir: "C:/Users/marca/.memory-consolidator-data/backups"
+  report_dir: "C:/Users/marca/.memory-consolidator-data/reports"
 
 areas:
   # Each area is one root the tool audits independently (its own report, its
@@ -27,6 +32,9 @@ areas:
   - name: dot-claude
     root: "C:/Users/marca/.claude"
     mode: scoped
+  - name: memory-diverged
+    root: "C:/Users/marca/claudecore/memory-diverged"
+    mode: full
 
 memory_file_patterns:
   # Used by `mode: scoped` areas and by `map`, to decide what counts as a

@@ -48,6 +48,39 @@ def create_snapshot(memory_root: Path, backup_dir: Path, reason: str) -> Path:
     return zip_path
 
 
+def create_targeted_snapshot(file_paths: list[Path], root_for_relnames: Path,
+                              backup_dir: Path, reason: str) -> Path:
+    """Like create_snapshot but backs up only specific files, not the whole
+    tree under root_for_relnames. Confirmed necessary: a 'scoped' area's
+    root is a whole project/workspace (potentially many GB, node_modules
+    etc.) — a full create_snapshot() there before every write hung
+    indefinitely in practice. Callers that only ever touch a small, known
+    set of files (like resolve-conflicts) should use this instead."""
+    base_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    timestamp = base_timestamp
+    suffix = 1
+    while (backup_dir / f"{timestamp}.zip").exists():
+        suffix += 1
+        timestamp = f"{base_timestamp}-{suffix}"
+    zip_path = backup_dir / f"{timestamp}.zip"
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in file_paths:
+            if f.exists():
+                zf.write(f, arcname=f.relative_to(root_for_relnames).as_posix())
+
+    manifest = _load_manifest(backup_dir)
+    manifest.append({
+        "timestamp": timestamp,
+        "zip": zip_path.name,
+        "reason": reason,
+        "memory_root": str(root_for_relnames),
+        "targeted_files": [str(f) for f in file_paths],
+    })
+    _save_manifest(backup_dir, manifest)
+    return zip_path
+
+
 def list_snapshots(backup_dir: Path) -> list[dict]:
     return _load_manifest(backup_dir)
 
