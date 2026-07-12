@@ -7,6 +7,51 @@ opportunities — duplicates, stale entries, broken links, index drift.
 No model inference — all checks are programmatic (string/heuristic based),
 so it runs the same way every time and costs nothing to run.
 
+## Recommended workflow
+
+The most value comes from running these roughly in order — later steps
+depend on the noise earlier steps clear out of the way.
+
+1. **Configure your areas** in [`rules.md`](rules.md) — at minimum your
+   dedicated memory folder (`mode: full`). Add `mode: scoped` areas for any
+   broader project/workspace roots you also want visibility into.
+2. **First audit, per area**, starting with your dedicated memory folder:
+   ```bash
+   python main.py audit --area <your-full-mode-area>
+   ```
+   This is the ground truth — spec conformance, duplicates, broken links,
+   stale entries. Fix what's cheap to fix by hand before moving on.
+3. **Audit your scoped areas** and expect noise the first time:
+   ```bash
+   python main.py audit --area <your-scoped-area>
+   ```
+4. **Run the review queue** on each scoped area to clear that noise for
+   good, rather than re-reading the same false positives every audit:
+   ```bash
+   python main.py review --area <your-scoped-area>
+   ```
+   Mark real-but-differently-shaped memory files `custom_format` and
+   everything else `ignore`. This is a one-time cost per file — it's
+   remembered from here on, in every area and on every machine that
+   shares this repo.
+5. **Re-audit** the scoped area — the score should jump once review
+   decisions suppress the noise (in testing this went from 47 findings /
+   51.9 down to 14 findings / 68.6 on one real workspace). Anything left is
+   genuinely worth fixing.
+6. **`map`** periodically to catch memory-shaped files that exist outside
+   any configured area entirely — new projects you haven't added to
+   `rules.md` yet:
+   ```bash
+   python main.py map --area <any-area>
+   ```
+7. **Re-run `audit` regularly** (weekly, or whenever memory files pile up)
+   as your steady-state check — by now it should be low-noise, high-signal.
+8. **New machine?** Run `python main.py init --area <name>` once to
+   bootstrap an empty memory folder, then `python main.py new-memory` to
+   scaffold new entries correctly from the start. Review decisions and
+   thresholds already travel with the repo via git, so a second machine
+   starts from the first machine's cleared-out baseline, not from zero.
+
 ## Areas
 
 `rules.md` defines a list of **areas** — each one an independent root the
