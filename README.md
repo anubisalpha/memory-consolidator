@@ -245,6 +245,13 @@ afterward in the same pass so you see the before/after score immediately.
 Neither fix ever touches an individual memory file's body — only
 `MEMORY.md` itself.
 
+An area can also set `index_header` in `rules.md` — used only when
+`auto_fix_missing_index_entries` creates a brand-new `MEMORY.md` (an
+existing index's own header is never touched). Useful for a folder like
+`memory-diverged` that should document its own purpose from the very
+first automated write — see the real example in this repo's own
+`rules.md`.
+
 ### Preview first with `dry-run`
 
 Before flipping `automation.mode` to `apply_safe_fixes` for real, preview
