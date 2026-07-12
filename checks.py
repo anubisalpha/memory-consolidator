@@ -223,12 +223,19 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
                          f"skipped: {n} files exceeds max_files_for_pairwise ({max_pairwise}) — "
                          "pairwise comparison would be too slow for an area-wide scan",
                          ref="")]
+    min_body_len = cfg.get("min_body_length_for_comparison", 20)
     for i in range(n):
         for j in range(i + 1, n):
             a, b = files[i], files[j]
             if a.parse_error or b.parse_error:
                 continue
             if not cfg["compare_across_types"] and a.mem_type != b.mem_type:
+                continue
+            # Two trivially short/empty bodies are near-identical by pure
+            # string similarity (SequenceMatcher gives two empty strings a
+            # ratio of 1.0) without being meaningfully "duplicate content" —
+            # skip comparisons below a floor to avoid that false positive.
+            if len(a.body.strip()) < min_body_len or len(b.body.strip()) < min_body_len:
                 continue
             ratio = SequenceMatcher(None, a.body, b.body).ratio()
             if ratio >= cfg["merge_threshold"]:

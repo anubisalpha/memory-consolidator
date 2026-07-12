@@ -77,6 +77,13 @@ def bootstrap_memory_folder(memory_root: Path) -> list[str]:
     return actions
 
 
+WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+
+
 def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug
@@ -89,6 +96,19 @@ def scaffold_memory_file(memory_root: Path, mem_type: str, slug: str, descriptio
     slug = slugify(slug)
     if not slug:
         raise ValueError("slug produced an empty filename after normalization — use at least one letter or digit")
+    if slug in WINDOWS_RESERVED_NAMES:
+        # Windows treats these as reserved device names regardless of
+        # extension (CON, PRN, AUX, NUL, COM1-9, LPT1-9) — confirmed that
+        # writing to e.g. "con.md" does not create a normal file at all, it
+        # addresses the actual console device. Rejected unconditionally
+        # (not just on win32) so a slug picked on Windows doesn't silently
+        # misbehave if the repo is later cloned/used on that OS, and so
+        # behavior is identical everywhere regardless of which OS is
+        # running this check.
+        raise ValueError(
+            f"'{slug}' is a Windows-reserved device name (CON/PRN/AUX/NUL/COM1-9/LPT1-9) — "
+            "choose a different slug"
+        )
     path = memory_root / f"{slug}.md"
     if path.exists():
         raise FileExistsError(f"{path} already exists")

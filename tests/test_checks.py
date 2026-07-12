@@ -229,6 +229,25 @@ def test_check_duplicates_disabled(memory_root, rules):
     assert checks.check_duplicates(files, rules) == []
 
 
+def test_check_duplicates_skips_trivially_short_bodies(memory_root, rules):
+    # two unrelated files with empty/near-empty bodies must not be flagged
+    # as "duplicates" just because two empty strings are 100% similar
+    write_memory_file(memory_root, "a.md", "a", "unrelated memory one", "user", "")
+    write_memory_file(memory_root, "b.md", "b", "unrelated memory two", "user", "")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_duplicates(files, rules)
+    assert findings == []
+
+
+def test_check_duplicates_still_flags_long_identical_bodies(memory_root, rules):
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "user", body)
+    files = scan_memory_files(memory_root)
+    findings = checks.check_duplicates(files, rules)
+    assert any("merge candidate" in f.message for f in findings)
+
+
 def test_check_staleness_probably_dead(memory_root, rules):
     old_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
     write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",

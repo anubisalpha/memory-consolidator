@@ -65,3 +65,18 @@ def test_scaffold_memory_file_date_like_slug_stays_a_string(memory_root):
     parsed = yaml.safe_load(frontmatter_text)
     assert isinstance(parsed["name"], str)
     assert parsed["name"] == "2026-01-01"
+
+
+def test_scaffold_memory_file_rejects_windows_reserved_names(memory_root):
+    # Windows treats these as reserved device names regardless of extension —
+    # writing to e.g. "con.md" addresses the console device, not a real file
+    for reserved in ["con", "CON", "prn", "aux", "nul", "com1", "lpt9"]:
+        with pytest.raises(ValueError, match="reserved device name"):
+            scaffold_memory_file(memory_root, "user", reserved, "desc")
+    assert not any(memory_root.iterdir())
+
+
+def test_scaffold_memory_file_allows_similar_but_not_reserved_names(memory_root):
+    # sanity check the rejection isn't overly broad
+    path = scaffold_memory_file(memory_root, "user", "console-notes", "desc")
+    assert path.exists()

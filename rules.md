@@ -42,6 +42,9 @@ duplicate_detection:
   review_threshold: 0.70     # ratio >= this (and < merge_threshold) => "review candidate"
   compare_across_types: false   # if false, only compare files with the same metadata.type
   max_files_for_pairwise: 800   # above this file count, skip pairwise comparison (O(n^2), too slow for area-wide scans)
+  min_body_length_for_comparison: 20   # bodies shorter than this (after stripping) are skipped — two trivially
+                                        # short/empty bodies are "100% similar" by pure string ratio without being
+                                        # meaningfully duplicate content
 
 staleness:
   enabled: true

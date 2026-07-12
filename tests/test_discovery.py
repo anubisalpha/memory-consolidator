@@ -45,3 +45,20 @@ def test_discover_matches_underscore_memory_suffix(tmp_path):
     found = discover_external_memory_files(tmp_path, memory_root)
     paths = {d.path.name for d in found}
     assert "simcity_sim_memory.md" in paths
+
+
+def test_discover_ignores_backups_and_reports_dirs(tmp_path):
+    # shares IGNORE_DIR_NAMES with scanner.py — a project's own backups/
+    # or reports/ folder (e.g. this tool's own project dir, if it happens
+    # to sit inside workspace_root) should never be treated as a source
+    # of memory files to discover.
+    memory_root = tmp_path / "memory"
+    memory_root.mkdir()
+
+    for noisy_dir in ("backups", "reports"):
+        noisy = tmp_path / "someproject" / noisy_dir
+        noisy.mkdir(parents=True)
+        (noisy / "MEMORY.md").write_text("noise", encoding="utf-8")
+
+    found = discover_external_memory_files(tmp_path, memory_root)
+    assert found == []

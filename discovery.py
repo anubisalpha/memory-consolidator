@@ -2,14 +2,14 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from scanner import IGNORE_DIR_NAMES
+
 DEFAULT_PATTERNS = [
     "**/MEMORY.md",
     "**/CLAUDE_MEMORY.md",
     "**/*_memory.md",
     "**/memory/**/*.md",
 ]
-
-IGNORE_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 
 
 @dataclass
