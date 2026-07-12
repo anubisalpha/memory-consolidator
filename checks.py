@@ -32,6 +32,8 @@ class Finding:
 def check_malformed_files(files: list[MemoryFile]) -> list[Finding]:
     out = []
     for f in files:
+        if f.review_decision == "custom_format":
+            continue  # user has already reviewed and approved this file's shape
         if f.parse_error:
             out.append(Finding("critical", "malformed", f.parse_error, ref=_ref(f.path)))
     return out
@@ -43,7 +45,7 @@ def check_missing_frontmatter_fields(files: list[MemoryFile], rules: dict) -> li
     out = []
     required = ["name", "description"]
     for f in files:
-        if f.parse_error:
+        if f.parse_error or f.review_decision == "custom_format":
             continue
         missing = [k for k in required if k not in f.frontmatter]
         if "metadata" not in f.frontmatter or "type" not in (f.frontmatter.get("metadata") or {}):
@@ -87,7 +89,7 @@ def check_slug_hygiene(files: list[MemoryFile], rules: dict) -> list[Finding]:
         return []
     out = []
     for f in files:
-        if f.parse_error:
+        if f.parse_error or f.review_decision == "custom_format":
             continue
         name = f.frontmatter.get("name")
         if not name:
@@ -104,7 +106,7 @@ def check_valid_type(files: list[MemoryFile], rules: dict) -> list[Finding]:
         return []
     out = []
     for f in files:
-        if f.parse_error:
+        if f.parse_error or f.review_decision == "custom_format":
             continue
         mem_type = f.mem_type
         if mem_type is None:

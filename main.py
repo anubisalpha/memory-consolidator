@@ -7,7 +7,9 @@ from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import ResolvedArea, get_config
 from discovery import discover_external_memory_files
+from registry import load_decisions, record_decision, remove_decision
 from report import print_console, write_markdown_report
+from reviewer import find_review_candidates
 from scanner import parse_index, scan_memory_files, scan_memory_files_scoped
 from templates import bootstrap_memory_folder, scaffold_memory_file
 
@@ -43,10 +45,10 @@ def cmd_audit(args) -> None:
         print(f"\n=== Area: {area.name} ({area.mode}) — {area.root} ===")
 
         if area.mode == "full":
-            files = scan_memory_files(area.root)
+            files = scan_memory_files(area.root, area_name=area.name)
             index_entries, index_lines = parse_index(area.root)
         else:
-            files = scan_memory_files_scoped(area.root, rules.get("memory_file_patterns", []))
+            files = scan_memory_files_scoped(area.root, rules.get("memory_file_patterns", []), area_name=area.name)
             index_entries, index_lines = [], []
 
         findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode)
@@ -113,6 +115,73 @@ def cmd_map(args) -> None:
     print("by a 'scoped' area in rules.md.")
 
 
+def cmd_review(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    patterns = rules.get("memory_file_patterns", [])
+    candidates = find_review_candidates(area.name, area.root, area.mode, patterns)
+
+    if not candidates:
+        print(f"No unreviewed non-canonical .md files found in area '{area.name}'.")
+        return
+
+    if args.non_interactive:
+        print(f"{len(candidates)} file(s) need review in area '{area.name}' "
+              "(run without --non-interactive to review interactively):")
+        for path, reason in candidates:
+            print(f"  {path}  — {reason}")
+        return
+
+    print(f"{len(candidates)} file(s) to review in area '{area.name}'.\n")
+    print("For each: [c]ustom_format (approve, suppress structural findings),")
+    print("          [i]gnore (not a memory file, exclude from all future scans),")
+    print("          [s]kip (leave undecided, ask again next time),")
+    print("          [q]uit review session.\n")
+
+    for path, reason in candidates:
+        rel = path.relative_to(area.root).as_posix()
+        preview = path.read_text(encoding="utf-8", errors="replace")[:400]
+        print(f"\n--- {rel} ---")
+        print(f"Reason flagged: {reason}")
+        print(f"Preview:\n{preview}\n{'...' if len(preview) == 400 else ''}")
+
+        answer = input("Decision [c/i/s/q]: ").strip().lower()
+        if answer == "q":
+            print("Stopping review session.")
+            break
+        if answer == "s" or answer == "":
+            continue
+        if answer not in ("c", "i"):
+            print("Unrecognized input, skipping.")
+            continue
+
+        decision = "custom_format" if answer == "c" else "ignore"
+        note = input("Note (why this decision — shown in future audits): ").strip()
+        record_decision(area.name, rel, decision, note)
+        print(f"Recorded: {rel} -> {decision}")
+
+
+def cmd_review_list(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    decisions = load_decisions(area.name)
+    if not decisions:
+        print(f"No recorded review decisions for area '{area.name}'.")
+        return
+    for d in decisions:
+        print(f"{d.decision:15} {d.rel_path:50} ({d.reviewed_at})  {d.note}")
+
+
+def cmd_review_forget(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    removed = remove_decision(area.name, args.rel_path)
+    if removed:
+        print(f"Removed decision for '{args.rel_path}' in area '{area.name}' — will be reviewed again.")
+    else:
+        print(f"No decision found for '{args.rel_path}' in area '{area.name}'.")
+
+
 def cmd_snapshot(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
@@ -159,6 +228,19 @@ def main() -> None:
     p_map = sub.add_parser("map", help="discover memory-shaped files scattered outside an area's root")
     p_map.add_argument("--area", default=None, help="required if multiple areas are configured")
     p_map.set_defaults(func=cmd_map)
+
+    p_review = sub.add_parser("review", help="interactively review non-canonical .md files and record a decision")
+    p_review.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review.set_defaults(func=cmd_review)
+
+    p_review_list = sub.add_parser("review-list", help="list recorded review decisions for an area")
+    p_review_list.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review_list.set_defaults(func=cmd_review_list)
+
+    p_review_forget = sub.add_parser("review-forget", help="remove a review decision so the file is reviewed again")
+    p_review_forget.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review_forget.add_argument("rel_path", help="path relative to the area's root, e.g. 'sub/file.md'")
+    p_review_forget.set_defaults(func=cmd_review_forget)
 
     p_snap = sub.add_parser("snapshot", help="manually snapshot an area's root")
     p_snap.add_argument("--area", default=None, help="required if multiple areas are configured")

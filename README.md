@@ -25,6 +25,31 @@ Two modes per area:
   `memory`) before paying for a full parse. This keeps `scoped` audits fast
   and free of false "malformed" findings on ordinary docs.
 
+## Review queue
+
+Not every non-canonical `.md` file is noise, and the tool shouldn't guess —
+some are a legitimately different (but valid) memory format from another
+project; some genuinely aren't memory files at all. `python main.py review`
+walks candidates one at a time (malformed files, invalid `metadata.type`,
+or — for `scoped` areas — files that fail the quick shape check) and lets
+you record a decision:
+
+- **`custom_format`** — approved; future audits stop flagging its
+  structure as malformed/non-canonical, but it's still scanned.
+- **`ignore`** — not a memory file; excluded from all future scans entirely.
+
+Decisions are stored in [`review_decisions.json`](review_decisions.json),
+keyed by area + path relative to that area's root, and **committed to git**
+(unlike `config.local.json`) since they're real judgment calls about the
+workspace's content, not machine-specific paths — a second machine doesn't
+have to re-review the same files.
+
+```bash
+python main.py review --area <name>          # interactive review session
+python main.py review-list --area <name>     # show recorded decisions
+python main.py review-forget --area <name> <rel/path.md>   # undo a decision
+```
+
 ## Usage
 
 ```bash
@@ -71,6 +96,8 @@ edit the YAML block there, no code changes needed.
 | `config.py` | Resolve each area's root, load `rules.md` |
 | `scanner.py` | Parse frontmatter + `MEMORY.md` index; `quick_is_memory_file` prefilter for scoped areas |
 | `discovery.py` | Workspace-wide discovery of memory-shaped files for `map` |
+| `reviewer.py` | Finds non-canonical files needing a user decision |
+| `registry.py` | Persists review decisions (`review_decisions.json`, committed to git) |
 | `checks.py` | All audit checks + compliance score |
 | `templates.py` | Fresh-machine bootstrap + compliant file scaffolding |
 | `backup.py` | Snapshot/rollback, isolated from area roots |

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from registry import decision_map
+
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 WIKILINK_RE = re.compile(r"\[\[([a-zA-Z0-9_\-]+)\]\]")
 INDEX_LINE_RE = re.compile(r"^-\s+\[([^\]]+)\]\(([^)]+)\)")
@@ -17,6 +19,8 @@ class MemoryFile:
     body: str = ""
     raw: str = ""
     parse_error: str | None = None
+    review_decision: str | None = None   # "custom_format" | "ignore" | None (undecided/canonical)
+    review_note: str = ""
 
     @property
     def name(self) -> str:
@@ -86,26 +90,42 @@ NON_MEMORY_FILES = {"MEMORY.md", "MEMORY_RULES.md"}
 IGNORE_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", "backups", "reports"}
 
 
-def scan_memory_files(memory_root: Path) -> list[MemoryFile]:
-    """Recursive: picks up *.md nested in subfolders of memory_root, not just the top level."""
+def scan_memory_files(memory_root: Path, area_name: str | None = None) -> list[MemoryFile]:
+    """Recursive: picks up *.md nested in subfolders of memory_root, not just
+    the top level. Consults the review registry (see registry.py) so files a
+    user has already reviewed are handled consistently: 'ignore' drops them
+    entirely, 'custom_format' keeps them but tags them so structural checks
+    (malformed/frontmatter/slug) don't re-flag an already-approved shape."""
+    decided = decision_map(area_name) if area_name else {}
     files = []
     for p in sorted(memory_root.rglob("*.md")):
         if p.name in NON_MEMORY_FILES:
             continue
         if any(part in IGNORE_DIR_NAMES for part in p.relative_to(memory_root).parts[:-1]):
             continue
-        files.append(parse_memory_file(p))
+        rel = p.relative_to(memory_root).as_posix()
+        decision = decided.get(rel)
+        if decision and decision.decision == "ignore":
+            continue
+        mf = parse_memory_file(p)
+        if decision:
+            mf.review_decision = decision.decision
+            mf.review_note = decision.note
+        files.append(mf)
     return files
 
 
-def scan_memory_files_scoped(root: Path, patterns: list[str]) -> list[MemoryFile]:
+def scan_memory_files_scoped(root: Path, patterns: list[str], area_name: str | None = None) -> list[MemoryFile]:
     """For 'scoped' areas (a whole project/workspace, not a dedicated memory
     folder): path patterns alone (e.g. '**/memory/**/*.md') are too broad —
     they also match things like a plugin's README.md that just happens to
     live under a folder named "memory". quick_is_memory_file() prefilters on
     a cheap byte-range peek before paying for a full parse, and files that
     fail the peek are silently skipped rather than reported as "malformed"
-    (they were never real memory candidates in the first place)."""
+    (they were never real memory candidates in the first place) UNLESS a
+    user has explicitly approved that file's shape via the review registry,
+    in which case it's force-included regardless of the peek result."""
+    decided = decision_map(area_name) if area_name else {}
     seen: dict[Path, MemoryFile] = {}
     for pattern in patterns:
         for p in root.glob(pattern):
@@ -116,9 +136,19 @@ def scan_memory_files_scoped(root: Path, patterns: list[str]) -> list[MemoryFile
             resolved = p.resolve()
             if resolved in seen:
                 continue
-            if not quick_is_memory_file(p):
+
+            rel = p.relative_to(root).as_posix()
+            decision = decided.get(rel)
+            if decision and decision.decision == "ignore":
                 continue
-            seen[resolved] = parse_memory_file(p)
+            if decision is None and not quick_is_memory_file(p):
+                continue
+
+            mf = parse_memory_file(p)
+            if decision:
+                mf.review_decision = decision.decision
+                mf.review_note = decision.note
+            seen[resolved] = mf
     return sorted(seen.values(), key=lambda f: str(f.path))
 
 
