@@ -1,4 +1,5 @@
 import pytest
+import yaml
 
 from templates import bootstrap_memory_folder, scaffold_memory_file, slugify
 
@@ -26,7 +27,7 @@ def test_slugify():
 def test_scaffold_memory_file_project_has_why_how(memory_root):
     path = scaffold_memory_file(memory_root, "project", "My Project", "a description")
     content = path.read_text(encoding="utf-8")
-    assert "name: my-project" in content
+    assert 'name: "my-project"' in content
     assert "**Why:**" in content
     assert "**How to apply:**" in content
 
@@ -52,3 +53,15 @@ def test_scaffold_memory_file_empty_slug_raises(memory_root):
     with pytest.raises(ValueError, match="empty filename"):
         scaffold_memory_file(memory_root, "user", "!!!...???", "desc")
     assert not any(memory_root.iterdir())
+
+
+def test_scaffold_memory_file_date_like_slug_stays_a_string(memory_root):
+    # a slug like "2026-01-01" is a plausible thing to type; the name: field
+    # must be quoted in the generated YAML so it round-trips as a string,
+    # not get silently coerced into a datetime.date on the next parse.
+    path = scaffold_memory_file(memory_root, "user", "2026-01-01", "a description")
+    content = path.read_text(encoding="utf-8")
+    frontmatter_text = content.split("---")[1]
+    parsed = yaml.safe_load(frontmatter_text)
+    assert isinstance(parsed["name"], str)
+    assert parsed["name"] == "2026-01-01"

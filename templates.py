@@ -99,7 +99,7 @@ def scaffold_memory_file(memory_root: Path, mem_type: str, slug: str, descriptio
         body = "{{memory content}}\n"
 
     content = f"""---
-name: {slug}
+name: "{slug}"
 description: {description}
 metadata:
   type: {mem_type}

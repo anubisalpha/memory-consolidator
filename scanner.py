@@ -24,11 +24,28 @@ class MemoryFile:
 
     @property
     def name(self) -> str:
-        return self.frontmatter.get("name", self.path.stem)
+        """Always a string. YAML implicitly coerces unquoted scalars that
+        look like dates/numbers/booleans (e.g. `name: 2026-01-01` parses as
+        a datetime.date, not a string) — falling back to the filename stem
+        for a non-string value keeps every caller that does .strip()/.lower()
+        on this safe, without needing to know about YAML's type inference.
+        check_frontmatter_field_types (checks.py) flags this case explicitly
+        so it isn't silently masked."""
+        raw = self.frontmatter.get("name")
+        return raw if isinstance(raw, str) else self.path.stem
 
     @property
     def mem_type(self) -> str | None:
-        return (self.frontmatter.get("metadata") or {}).get("type")
+        """None if metadata is missing, not a mapping (e.g. `metadata: foo`
+        parses as a plain string), or type isn't a string — treated the same
+        as "no type set" by every check that branches on mem_type, rather
+        than raising deep inside a check function. See name's docstring for
+        why this defensive coercion is needed at all."""
+        metadata = self.frontmatter.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        t = metadata.get("type")
+        return t if isinstance(t, str) else None
 
     @property
     def wikilinks(self) -> list[str]:

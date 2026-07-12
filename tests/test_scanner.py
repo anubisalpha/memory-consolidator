@@ -43,6 +43,39 @@ def test_scan_excludes_index_and_rules_files(memory_root):
     assert names == {"a.md"}
 
 
+def test_name_falls_back_to_stem_when_yaml_coerces_to_date(memory_root):
+    # unquoted `name: 2026-01-01` parses as datetime.date, not a string
+    path = memory_root / "date-slug.md"
+    path.write_text("---\nname: 2026-01-01\ndescription: desc\nmetadata:\n  type: user\n---\nbody\n",
+                     encoding="utf-8")
+    mf = parse_memory_file(path)
+    assert isinstance(mf.frontmatter.get("name"), object)  # confirms YAML did coerce it
+    assert mf.name == "date-slug"  # .name property still returns a usable string
+
+
+def test_name_falls_back_to_stem_when_yaml_coerces_to_int(memory_root):
+    path = memory_root / "numeric-slug.md"
+    path.write_text("---\nname: 2026\ndescription: desc\nmetadata:\n  type: user\n---\nbody\n",
+                     encoding="utf-8")
+    mf = parse_memory_file(path)
+    assert isinstance(mf.frontmatter.get("name"), int)
+    assert mf.name == "numeric-slug"
+
+
+def test_mem_type_none_when_metadata_not_a_mapping(memory_root):
+    path = memory_root / "bad-metadata.md"
+    path.write_text("---\nname: a\ndescription: desc\nmetadata: sometext\n---\nbody\n", encoding="utf-8")
+    mf = parse_memory_file(path)
+    assert mf.mem_type is None  # must not raise
+
+
+def test_mem_type_none_when_type_value_not_a_string(memory_root):
+    path = memory_root / "bad-type.md"
+    path.write_text("---\nname: a\ndescription: desc\nmetadata:\n  type: 123\n---\nbody\n", encoding="utf-8")
+    mf = parse_memory_file(path)
+    assert mf.mem_type is None
+
+
 def test_wikilinks_extracted(memory_root):
     path = write_memory_file(memory_root, "a.md", "a", "desc a", "user", "see [[b]] and [[c]]")
     mf = parse_memory_file(path)

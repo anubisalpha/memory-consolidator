@@ -128,6 +128,50 @@ def test_check_valid_type(memory_root, rules):
     assert len(findings) == 1
 
 
+def test_check_frontmatter_field_types_flags_non_string_name(memory_root):
+    path = memory_root / "date-slug.md"
+    path.write_text("---\nname: 2026-01-01\ndescription: desc\nmetadata:\n  type: user\n---\nbody\n",
+                     encoding="utf-8")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_frontmatter_field_types(files)
+    assert any(f.category == "frontmatter_type" and "not a string" in f.message for f in findings)
+
+
+def test_check_frontmatter_field_types_flags_non_dict_metadata(memory_root):
+    path = memory_root / "bad-metadata.md"
+    path.write_text("---\nname: a\ndescription: desc\nmetadata: sometext\n---\nbody\n", encoding="utf-8")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_frontmatter_field_types(files)
+    assert any(f.category == "frontmatter_type" and "not a mapping" in f.message for f in findings)
+
+
+def test_check_frontmatter_field_types_clean_file_no_findings(memory_root):
+    write_memory_file(memory_root, "a.md", "a", "desc", "user", "body")
+    files = scan_memory_files(memory_root)
+    assert checks.check_frontmatter_field_types(files) == []
+
+
+def test_downstream_checks_do_not_crash_on_coerced_name(memory_root, rules):
+    path = memory_root / "date-slug.md"
+    path.write_text("---\nname: 2026-01-01\ndescription: a valid description here\nmetadata:\n  type: user\n---\nbody\n",
+                     encoding="utf-8")
+    files = scan_memory_files(memory_root)
+    # must not raise TypeError/AttributeError
+    checks.check_slug_hygiene(files, rules)
+    checks.check_description_quality(files, rules)
+
+
+def test_downstream_checks_do_not_crash_on_non_dict_metadata(memory_root, rules):
+    path = memory_root / "bad-metadata.md"
+    path.write_text("---\nname: a\ndescription: a valid description here\nmetadata: sometext\n---\nbody\n",
+                     encoding="utf-8")
+    files = scan_memory_files(memory_root)
+    # must not raise AttributeError
+    checks.check_valid_type(files, rules)
+    checks.check_staleness(files, rules)
+    checks.check_why_how_structure(files, rules)
+
+
 def test_check_why_how_structure_missing(memory_root, rules):
     write_memory_file(memory_root, "a.md", "a", "desc", "project", "just a fact, no structure")
     files = scan_memory_files(memory_root)

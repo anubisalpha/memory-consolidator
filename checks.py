@@ -48,10 +48,35 @@ def check_missing_frontmatter_fields(files: list[MemoryFile], rules: dict) -> li
         if f.parse_error or f.review_decision == "custom_format":
             continue
         missing = [k for k in required if k not in f.frontmatter]
-        if "metadata" not in f.frontmatter or "type" not in (f.frontmatter.get("metadata") or {}):
+        metadata = f.frontmatter.get("metadata")
+        if not isinstance(metadata, dict) or "type" not in metadata:
             missing.append("metadata.type")
         if missing:
             out.append(Finding("warn", "frontmatter", f"missing fields: {', '.join(missing)}", ref=_ref(f.path)))
+    return out
+
+
+def check_frontmatter_field_types(files: list[MemoryFile]) -> list[Finding]:
+    """YAML implicitly coerces unquoted scalars that look like dates/numbers/
+    booleans (e.g. `name: 2026-01-01` parses as a datetime.date, not a
+    string). MemoryFile.name/.mem_type already defend against this — this
+    check surfaces it as an explicit finding instead of letting it be
+    silently masked by that fallback."""
+    out = []
+    for f in files:
+        if f.parse_error or f.review_decision == "custom_format":
+            continue
+        raw_name = f.frontmatter.get("name")
+        if raw_name is not None and not isinstance(raw_name, str):
+            out.append(Finding("warn", "frontmatter_type",
+                                f"name: is a {type(raw_name).__name__} ({raw_name!r}), not a string — "
+                                "likely needs quoting in the YAML (e.g. name: \"2026-01-01\")",
+                                ref=_ref(f.path)))
+        raw_metadata = f.frontmatter.get("metadata")
+        if raw_metadata is not None and not isinstance(raw_metadata, dict):
+            out.append(Finding("warn", "frontmatter_type",
+                                f"metadata: is a {type(raw_metadata).__name__}, not a mapping — expected "
+                                "'metadata:\\n  type: ...'", ref=_ref(f.path)))
     return out
 
 
@@ -94,6 +119,8 @@ def check_slug_hygiene(files: list[MemoryFile], rules: dict) -> list[Finding]:
         name = f.frontmatter.get("name")
         if not name:
             continue
+        if not isinstance(name, str):
+            continue  # flagged separately by check_frontmatter_field_types
         if not KEBAB_RE.match(name):
             out.append(Finding("warn", "slug_hygiene", f"name '{name}' is not kebab-case", ref=_ref(f.path)))
         if name != f.path.stem:
@@ -348,6 +375,7 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings = []
     findings += check_malformed_files(files)
     findings += check_missing_frontmatter_fields(files, rules)
+    findings += check_frontmatter_field_types(files)
     if mode == "full":
         findings += check_orphans(memory_root, files, index_entries)
         findings += check_dead_links(memory_root, index_entries)
