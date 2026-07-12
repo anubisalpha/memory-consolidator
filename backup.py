@@ -21,7 +21,7 @@ def _save_manifest(backup_dir: Path, manifest: list[dict]) -> None:
     _manifest_path(backup_dir).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def create_snapshot(memory_root: Path, backup_dir: Path, reason: str) -> Path:
+def create_snapshot(memory_root: Path, backup_dir: Path, reason: str, keep_last_n: int | None = None) -> Path:
     base_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     timestamp = base_timestamp
     suffix = 1
@@ -45,11 +45,13 @@ def create_snapshot(memory_root: Path, backup_dir: Path, reason: str) -> Path:
         "memory_root": str(memory_root),
     })
     _save_manifest(backup_dir, manifest)
+    if keep_last_n is not None:
+        _prune_old_snapshots(backup_dir, str(memory_root), keep_last_n)
     return zip_path
 
 
 def create_targeted_snapshot(file_paths: list[Path], root_for_relnames: Path,
-                              backup_dir: Path, reason: str) -> Path:
+                              backup_dir: Path, reason: str, keep_last_n: int | None = None) -> Path:
     """Like create_snapshot but backs up only specific files, not the whole
     tree under root_for_relnames. Confirmed necessary: a 'scoped' area's
     root is a whole project/workspace (potentially many GB, node_modules
@@ -78,7 +80,33 @@ def create_targeted_snapshot(file_paths: list[Path], root_for_relnames: Path,
         "targeted_files": [str(f) for f in file_paths],
     })
     _save_manifest(backup_dir, manifest)
+    if keep_last_n is not None:
+        _prune_old_snapshots(backup_dir, str(root_for_relnames), keep_last_n)
     return zip_path
+
+
+def _prune_old_snapshots(backup_dir: Path, memory_root: str, keep_last_n: int) -> None:
+    """Deletes the oldest snapshot zips (and their manifest entries) for this
+    specific memory_root, keeping only the newest keep_last_n. Scoped by
+    memory_root (not global) because backup_dir is shared across all
+    configured areas — pruning globally would let one area's frequent
+    snapshots evict another area's only backup. Mirrors report.py's
+    _prune_old_reports, which prunes per-area via report_name_prefix."""
+    manifest = _load_manifest(backup_dir)
+    area_entries = [m for m in manifest if m.get("memory_root") == memory_root]
+    excess = len(area_entries) - keep_last_n
+    if excess <= 0:
+        return
+    # manifest entries are appended in creation order, so the oldest for
+    # this area are simply the earliest matching entries
+    to_remove = area_entries[:excess]
+    remove_zips = {e["zip"] for e in to_remove}
+    for entry in to_remove:
+        zip_path = backup_dir / entry["zip"]
+        if zip_path.exists():
+            zip_path.unlink()
+    manifest = [m for m in manifest if m.get("zip") not in remove_zips]
+    _save_manifest(backup_dir, manifest)
 
 
 def list_snapshots(backup_dir: Path) -> list[dict]:

@@ -109,15 +109,23 @@ external_scan:
 
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto
-  # Both flags below only take effect in 'full' mode areas (a 'scoped' area
-  # has no single MEMORY.md index to fix) and only under apply_safe_fixes/
-  # full_auto. Both default off — opt in per flag.
+  # These two flags take effect in 'full' mode areas (a 'scoped' area has no
+  # single MEMORY.md index to fix) under apply_safe_fixes/full_auto. Opt in
+  # per flag.
   auto_fix_missing_index_entries: true   # append an index line for each orphan file (never rewrites existing lines)
   auto_fix_broken_links: false            # remove MEMORY.md lines whose href no longer exists (never touches valid lines)
+  # These two flags ONLY take effect under full_auto (never apply_safe_fixes)
+  # — see fixer.py's module docstring for why they're allowed to touch
+  # individual file bodies where the two flags above never do.
+  auto_fix_mark_stale: true                # prepend a visible staleness marker to flagged files (never removes content)
+  auto_fix_merge_exact_duplicates: true    # turn byte-identical duplicate files into pointer stubs (exact matches only)
   require_backup_before_apply: true       # hardcoded safety net, not actually togglable in code
 
 reporting:
   keep_last_n_reports: 20    # older reports auto-pruned (reports only, never backups)
+
+backup_retention:
+  keep_last_n: 3             # per-area: newest snapshot + 2 older ones kept, rest auto-pruned after each new snapshot
 ```
 
 ## Notes
@@ -131,9 +139,23 @@ reporting:
     broken-links only *removes* lines whose target no longer exists —
     neither ever rewrites or reinterprets existing valid content, and
     neither touches individual memory files, only `MEMORY.md` itself.
-  - `full_auto` — currently behaves identically to `apply_safe_fixes`
-    (reserved for acting on duplicates/staleness too in future). Still
-    always backed up.
+  - `full_auto` — runs everything `apply_safe_fixes` does, plus two more
+    fixes gated by `auto_fix_mark_stale` / `auto_fix_merge_exact_duplicates`.
+    Unlike the two `apply_safe_fixes` fixes, these touch individual memory
+    files' bodies, not just `MEMORY.md` — but each is scoped to stay
+    content-preserving: `mark_stale_files` only prepends a visible marker
+    (never removes text) to files matching `check_staleness`'s date-based
+    'stale' signal (not the low-confidence mtime fallback), and
+    `merge_exact_duplicates` only rewrites a file into a pointer stub when
+    its body is byte-identical to another file's (ratio == 1.0) — anything
+    short of an exact match (the near-duplicate thresholds
+    `check_duplicates` reports) is left as a judgment call for a human,
+    same as cross-area conflicts are left to `resolve-conflicts`. Still
+    always backed up first.
 - Backups and reports live in this project folder, never inside any area's
   root, so they can never be picked up by anything that loads `MEMORY.md`
   into context.
+- `backup_retention.keep_last_n` prunes snapshots per-area (by each entry's
+  `memory_root` in `manifest.json`), the same way `reporting.keep_last_n_reports`
+  prunes reports per-area. Applied after every `create_snapshot`/
+  `create_targeted_snapshot` call, so it also covers manual `backup` runs.

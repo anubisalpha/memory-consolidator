@@ -131,3 +131,52 @@ def test_create_targeted_snapshot_ignores_untouched_files_when_huge(memory_root,
     zip_path = create_targeted_snapshot([target], memory_root, backup_dir, reason="test")
     with zipfile.ZipFile(zip_path) as zf:
         assert zf.namelist() == ["file_0.md"]
+
+
+# ---- backup_retention pruning ----
+
+def test_create_snapshot_prunes_older_snapshots_beyond_keep_last_n(memory_root, backup_dir):
+    for i in range(5):
+        (memory_root / "a.md").write_text(f"v{i}", encoding="utf-8")
+        create_snapshot(memory_root, backup_dir, reason=f"v{i}", keep_last_n=3)
+
+    snapshots = list_snapshots(backup_dir)
+    assert len(snapshots) == 3
+    assert [s["reason"] for s in snapshots] == ["v2", "v3", "v4"]
+    # pruned zips must actually be deleted from disk, not just the manifest
+    assert len(list(backup_dir.glob("*.zip"))) == 3
+
+
+def test_create_snapshot_no_pruning_when_keep_last_n_none(memory_root, backup_dir):
+    for i in range(5):
+        (memory_root / "a.md").write_text(f"v{i}", encoding="utf-8")
+        create_snapshot(memory_root, backup_dir, reason=f"v{i}")
+
+    assert len(list_snapshots(backup_dir)) == 5
+
+
+def test_create_snapshot_prunes_only_own_area(memory_root, backup_dir, tmp_path):
+    other_root = tmp_path / "other_area"
+    other_root.mkdir()
+
+    for i in range(4):
+        (memory_root / "a.md").write_text(f"v{i}", encoding="utf-8")
+        create_snapshot(memory_root, backup_dir, reason=f"area-a-v{i}", keep_last_n=2)
+    (other_root / "b.md").write_text("only version", encoding="utf-8")
+    create_snapshot(other_root, backup_dir, reason="area-b-only", keep_last_n=2)
+
+    snapshots = list_snapshots(backup_dir)
+    reasons = [s["reason"] for s in snapshots]
+    # area-a should be pruned down to its last 2, area-b's single snapshot untouched
+    assert reasons == ["area-a-v2", "area-a-v3", "area-b-only"]
+
+
+def test_create_targeted_snapshot_prunes_older_snapshots(memory_root, backup_dir):
+    for i in range(4):
+        (memory_root / "a.md").write_text(f"v{i}", encoding="utf-8")
+        create_targeted_snapshot([memory_root / "a.md"], memory_root, backup_dir,
+                                  reason=f"v{i}", keep_last_n=2)
+
+    snapshots = list_snapshots(backup_dir)
+    assert len(snapshots) == 2
+    assert [s["reason"] for s in snapshots] == ["v2", "v3"]

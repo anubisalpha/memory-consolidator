@@ -11,7 +11,7 @@ from consolidate import write_canonical_file, write_pointer_stub
 from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
 from dryrun import create_dry_run_copy, diff_memory_index
-from fixer import add_missing_index_entries, remove_dead_index_links
+from fixer import add_missing_index_entries, mark_stale_files, merge_exact_duplicates, remove_dead_index_links
 from registry import load_decisions, record_decision, remove_decision
 from report import print_console, print_cross_area_console, write_cross_area_report, write_markdown_report
 from reviewer import find_review_candidates
@@ -30,6 +30,12 @@ def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict,
         index_entries, index_lines = parse_index(root)
     if auto_cfg.get("auto_fix_missing_index_entries", False):
         actions += add_missing_index_entries(root, files, index_entries, index_header=index_header)
+
+    if auto_cfg.get("mode") == "full_auto":
+        if auto_cfg.get("auto_fix_mark_stale", False):
+            actions += mark_stale_files(files, rules)
+        if auto_cfg.get("auto_fix_merge_exact_duplicates", False):
+            actions += merge_exact_duplicates(files, rules)
     return actions
 
 
@@ -84,7 +90,8 @@ def cmd_audit(args) -> None:
         if rules["automation"]["mode"] != "report_only":
             backup_dir = Path(rules["paths"]["backup_dir"])
             ensure_backup_safe_for_area(area, backup_dir)
-            snap = create_snapshot(area.root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']}) [{area.name}]")
+            snap = create_snapshot(area.root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']}) [{area.name}]",
+                                    keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
             print(f"Snapshot created before any apply step: {snap}")
 
             if area.mode != "full":
@@ -317,7 +324,8 @@ def cmd_resolve_conflicts(args) -> None:
         touched = sorted(area_touched_files.get(area.name, set()))
         if touched:
             create_targeted_snapshot(touched, area.root, backup_dir,
-                                      reason=f"pre-resolve-conflicts [{area.name}]")
+                                      reason=f"pre-resolve-conflicts [{area.name}]",
+                                      keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
     print(f"Snapshotted {len(involved)} area(s) before resolving: {', '.join(a.name for a in involved)}\n")
 
     file_lookup = {}
@@ -427,7 +435,8 @@ def cmd_snapshot(args) -> None:
     area = _select_area(rules, args.area)
     backup_dir = Path(rules["paths"]["backup_dir"])
     ensure_backup_safe_for_area(area, backup_dir)
-    snap = create_snapshot(area.root, backup_dir, reason=args.reason or "manual")
+    snap = create_snapshot(area.root, backup_dir, reason=args.reason or "manual",
+                            keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
     print(f"Snapshot created: {snap}")
 
 
