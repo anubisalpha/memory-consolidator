@@ -55,7 +55,9 @@ depend on the noise earlier steps clear out of the way.
    as your steady-state check — by now it should be low-noise, high-signal.
 8. **If you have more than one area, run `cross-check`** to find where the
    same information has fragmented across them — that's your consolidation
-   list for picking a single source of truth.
+   list. For the genuinely diverged ones, `resolve-conflicts` walks you
+   through picking a canonical version (needs a `memory-diverged` area
+   configured first).
 9. **New machine?** Run `python main.py init --area <name>` once to
    bootstrap an empty memory folder, then `python main.py new-memory` to
    scaffold new entries correctly from the start. Review decisions and
@@ -101,10 +103,43 @@ more than one place:
   as the *same physical file* rather than reported as false "duplicates" —
   this notice explains why, instead of leaving it a mystery.
 
-Like everything else, this is report-only — it never writes anything, so
-there's no `--area` flag (it needs at least two areas to compare) and no
-snapshot step. Consolidating is a decision only you can make; the report
-just gives you the concrete evidence to make it.
+`cross-check` itself is report-only — it never writes anything, so there's
+no `--area` flag (it needs at least two areas to compare) and no snapshot
+step. It gives you the concrete evidence; `resolve-conflicts` (below) is
+what acts on it.
+
+### Resolving diverged conflicts
+
+For the genuinely actionable case — `critical` slug conflicts where content
+has diverged — `python main.py resolve-conflicts` walks each one
+interactively and lets you pick which version to keep:
+
+```bash
+python main.py resolve-conflicts
+python main.py resolve-conflicts --diverged-area my-custom-name   # default: "memory-diverged"
+```
+
+This requires a **dedicated `mode: full` area named `memory-diverged`**
+configured in `rules.md` (or pass `--diverged-area` for a different name).
+For each diverged conflict, both versions are shown side by side; picking
+one:
+
+1. Writes the chosen content into the `memory-diverged` area as the new
+   single source of truth, with a dated consolidation note.
+2. Rewrites **both** original files as pointer stubs referencing it there —
+   preserving each file's own `name:`/`description:`/`metadata.type` so it
+   still resolves correctly wherever else it's referenced (index entries,
+   `[[wikilinks]]`).
+
+Deliberately **not** a direct cross-link between the two original areas: a
+pointer from area A straight into area B breaks the moment B is moved,
+renamed, or deleted later. Centralizing resolved content in a folder whose
+only purpose is holding consolidated memories means neither original
+area's lifecycle can break the reference. Every involved area (both
+originals plus `memory-diverged`) is snapshotted before anything is
+written; `--non-interactive` only lists what needs resolving and never
+writes. Pointer stubs are automatically excluded from future `cross-check`
+runs, so a resolved conflict doesn't get re-flagged as still diverged.
 
 ## Review queue
 
@@ -145,6 +180,7 @@ python main.py init --area <name>                # bootstrap MEMORY.md + referen
 python main.py new-memory --area <name> --type feedback --slug my-slug --description "..."
 python main.py map --area <name>                 # find memory-shaped files scattered outside an area's root
 python main.py cross-check                       # find consolidation candidates ACROSS all configured areas
+python main.py resolve-conflicts                 # interactively resolve diverged conflicts into 'memory-diverged'
 ```
 
 `--area` is optional whenever only one area is configured, or for `audit`
@@ -167,6 +203,7 @@ scripts/audit.sh [area]          # scripts\audit.bat [area]   — omit area for 
 scripts/review.sh <area>         # scripts\review.bat <area> — interactive
 scripts/map.sh <area>            # scripts\map.bat <area>
 scripts/cross-check.sh           # scripts\cross-check.bat
+scripts/resolve-conflicts.sh     # scripts\resolve-conflicts.bat
 scripts/test.sh                  # scripts\test.bat     — run the pytest suite
 ```
 
@@ -254,6 +291,7 @@ rather than accumulating copies). Once you're satisfied, set
 | `scanner.py` | Parse frontmatter + `MEMORY.md` index; `quick_is_memory_file` prefilter for scoped areas |
 | `discovery.py` | Workspace-wide discovery of memory-shaped files for `map` |
 | `crosscheck.py` | `cross-check`: slug conflicts, duplicates, and overlap detection across all areas |
+| `consolidate.py` | `resolve-conflicts`: writes the canonical file + rewrites originals as pointer stubs |
 | `reviewer.py` | Finds non-canonical files needing a user decision |
 | `registry.py` | Persists review decisions (`review_decisions.json`, committed to git) |
 | `checks.py` | All audit checks + compliance score |
