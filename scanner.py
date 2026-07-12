@@ -64,6 +64,14 @@ class IndexEntry:
     line_no: int
 
 
+def is_pointer_stub(body: str) -> bool:
+    """Matches consolidate.write_pointer_stub's convention (also used by
+    the pre-existing 'pointer only' memory convention). A pointer stub's
+    body is *supposed* to read differently from whatever it points to —
+    that's not an unresolved divergence/duplicate, it's the resolved state."""
+    return body.strip().lower().startswith("pointer only")
+
+
 def parse_memory_file(path: Path) -> MemoryFile:
     raw = path.read_text(encoding="utf-8", errors="replace")
     match = FRONTMATTER_RE.match(raw)

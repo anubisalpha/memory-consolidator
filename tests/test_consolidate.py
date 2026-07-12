@@ -56,11 +56,36 @@ def test_write_pointer_stub_preserves_name_and_type(tmp_path):
     assert "Pointer only" in content
     assert "memory-diverged" in content
     assert "shared-slug.md" in content
+    # the pointer target must be prefixed with the diverged area's folder
+    # name so check_external_pointers (checks.py) resolves it against
+    # workspace_root as `memory-diverged/shared-slug.md`, not a bare
+    # filename that would resolve to workspace_root itself
+    assert "`memory-diverged/shared-slug.md`" in content
 
     reparsed = parse_memory_file(original_path)
     assert reparsed.name == "shared-slug"
     assert reparsed.mem_type == "project"
     assert reparsed.parse_error is None
+
+
+def test_write_pointer_stub_resolves_via_check_external_pointers(tmp_path):
+    import checks
+
+    workspace_root = tmp_path
+    diverged_root = workspace_root / "memory-diverged"
+    diverged_root.mkdir()
+    (diverged_root / "shared-slug.md").write_text("canonical content", encoding="utf-8")
+
+    original_path = write_memory_file(workspace_root, "orig.md", "shared-slug", "original desc",
+                                       "project", "full original content")
+    original = parse_memory_file(original_path)
+    canonical_path = diverged_root / "shared-slug.md"
+    write_pointer_stub(original, canonical_path, "memory-diverged")
+
+    reparsed = parse_memory_file(original_path)
+    rules = {"external_scan": {"enabled": True, "workspace_root": str(workspace_root)}}
+    findings = checks.check_external_pointers([reparsed], rules)
+    assert findings == []
 
 
 def test_write_pointer_stub_normalizes_coerced_name(tmp_path):

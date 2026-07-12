@@ -33,13 +33,19 @@ def write_pointer_stub(original: MemoryFile, canonical_path: Path, diverged_area
     """Overwrites the original file's body with a pointer to the canonical
     file, preserving its own name/description/type so it still resolves
     correctly wherever else it's referenced from (e.g. MEMORY.md index
-    entries, [[wikilinks]])."""
+    entries, [[wikilinks]]).
+
+    The pointer text includes the diverged area's folder name as a prefix
+    (e.g. `memory-diverged/slug.md`) rather than a bare filename, because
+    check_external_pointers (checks.py) resolves this path against
+    workspace_root — a bare filename would resolve to workspace_root itself
+    and always report as missing."""
     frontmatter = dict(original.frontmatter)
     frontmatter["name"] = original.name  # normalize in case the raw value was YAML-coerced (see scanner.py)
     fm_text = yaml.safe_dump(frontmatter, default_flow_style=False, sort_keys=False).strip()
     body = (
         f"Pointer only; consolidated into the '{diverged_area_name}' area — "
-        f"full details in `{canonical_path.name}`.\n"
+        f"full details in `{diverged_area_name}/{canonical_path.name}`.\n"
     )
     content = f"---\n{fm_text}\n---\n\n{body}"
     original.path.write_text(content, encoding="utf-8")

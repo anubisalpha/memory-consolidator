@@ -6,7 +6,7 @@ only looks ACROSS areas."""
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from scanner import MemoryFile
+from scanner import MemoryFile, is_pointer_stub
 
 
 @dataclass
@@ -18,14 +18,6 @@ class CrossAreaFinding:
     ref_a: str
     area_b: str
     ref_b: str
-
-
-def _is_pointer_stub(body: str) -> bool:
-    """Matches consolidate.write_pointer_stub's convention (also used by
-    the pre-existing 'pointer only' memory convention). A pointer stub's
-    body is *supposed* to read differently from whatever it points to —
-    that's not an unresolved divergence, it's the resolved state."""
-    return body.strip().lower().startswith("pointer only")
 
 
 def find_overlapping_areas(areas: list) -> list[CrossAreaFinding]:
@@ -69,7 +61,7 @@ def find_cross_area_slug_conflicts(area_files: dict[str, list[MemoryFile]]) -> l
     by_name: dict[str, list[tuple[str, MemoryFile]]] = {}
     for area_name, files in area_files.items():
         for f in files:
-            if f.parse_error or _is_pointer_stub(f.body):
+            if f.parse_error or is_pointer_stub(f.body):
                 continue
             by_name.setdefault(f.name, []).append((area_name, f))
 
@@ -115,7 +107,7 @@ def find_cross_area_duplicates(area_files: dict[str, list[MemoryFile]], rules: d
 
     flat: list[tuple[str, MemoryFile]] = [
         (area_name, f) for area_name, files in area_files.items()
-        for f in files if not f.parse_error and not _is_pointer_stub(f.body)
+        for f in files if not f.parse_error and not is_pointer_stub(f.body)
     ]
     n = len(flat)
     if n > max_pairwise:

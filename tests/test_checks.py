@@ -239,6 +239,19 @@ def test_check_duplicates_skips_trivially_short_bodies(memory_root, rules):
     assert findings == []
 
 
+def test_check_duplicates_excludes_pointer_stubs(memory_root, rules):
+    # two unrelated pointer stubs share the same fixed wording by design
+    # (see consolidate.write_pointer_stub) — that similarity is the resolved
+    # state, not an unresolved duplicate, and must not be flagged
+    stub_a = "Pointer only; consolidated into the 'memory-diverged' area — full details in `memory-diverged/slug-a.md`.\n"
+    stub_b = "Pointer only; consolidated into the 'memory-diverged' area — full details in `memory-diverged/slug-b.md`.\n"
+    write_memory_file(memory_root, "a.md", "a", "unrelated memory one long enough", "project", stub_a)
+    write_memory_file(memory_root, "b.md", "b", "unrelated memory two long enough", "project", stub_b)
+    files = scan_memory_files(memory_root)
+    findings = checks.check_duplicates(files, rules)
+    assert findings == []
+
+
 def test_check_duplicates_still_flags_long_identical_bodies(memory_root, rules):
     body = "identical content " * 30
     write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)

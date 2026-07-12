@@ -5,7 +5,7 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from scanner import IndexEntry, MemoryFile
+from scanner import IndexEntry, MemoryFile, is_pointer_stub
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -228,6 +228,12 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
         for j in range(i + 1, n):
             a, b = files[i], files[j]
             if a.parse_error or b.parse_error:
+                continue
+            # Pointer stubs are supposed to read similarly to each other
+            # (same fixed wording, different target filename) — that's the
+            # resolved state, not an unresolved duplicate. See crosscheck.py's
+            # cross-area equivalent of this exclusion.
+            if is_pointer_stub(a.body) or is_pointer_stub(b.body):
                 continue
             if not cfg["compare_across_types"] and a.mem_type != b.mem_type:
                 continue
