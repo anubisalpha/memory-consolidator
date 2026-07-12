@@ -53,7 +53,10 @@ depend on the noise earlier steps clear out of the way.
    ```
 7. **Re-run `audit` regularly** (weekly, or whenever memory files pile up)
    as your steady-state check — by now it should be low-noise, high-signal.
-8. **New machine?** Run `python main.py init --area <name>` once to
+8. **If you have more than one area, run `cross-check`** to find where the
+   same information has fragmented across them — that's your consolidation
+   list for picking a single source of truth.
+9. **New machine?** Run `python main.py init --area <name>` once to
    bootstrap an empty memory folder, then `python main.py new-memory` to
    scaffold new entries correctly from the start. Review decisions and
    thresholds already travel with the repo via git, so a second machine
@@ -76,6 +79,32 @@ Two modes per area:
   files (e.g. a plugin's `README.md` that happens to live in a folder named
   `memory`) before paying for a full parse. This keeps `scoped` audits fast
   and free of false "malformed" findings on ordinary docs.
+
+## Cross-check: finding a single source of truth
+
+`audit` only looks *within* one area at a time. `python main.py cross-check`
+scans every configured area together and compares them *against each
+other*, which is what you need when the same information has drifted into
+more than one place:
+
+- **Slug conflicts** — the same `name:` slug used in two different areas.
+  Identical content is flagged `info` ("safe to keep just one"); differing
+  content is flagged `critical` ("these have diverged, pick one as
+  canonical") — that's the actionable case worth acting on.
+- **Cross-area duplicates** — near-identical body content across areas even
+  when the slugs differ, using the same `duplicate_detection` thresholds
+  `audit` uses, so the two stay consistent.
+- **Overlapping area roots** — a one-time notice when one area's root is
+  nested inside another's (e.g. a `scoped` area covering a whole workspace
+  that happens to also contain a `full` area's dedicated memory folder).
+  Files under the inner area get scanned by both, but are correctly deduped
+  as the *same physical file* rather than reported as false "duplicates" —
+  this notice explains why, instead of leaving it a mystery.
+
+Like everything else, this is report-only — it never writes anything, so
+there's no `--area` flag (it needs at least two areas to compare) and no
+snapshot step. Consolidating is a decision only you can make; the report
+just gives you the concrete evidence to make it.
 
 ## Review queue
 
@@ -115,6 +144,7 @@ python main.py rollback --area <name> --which latest   # restore an area from a 
 python main.py init --area <name>                # bootstrap MEMORY.md + reference card on a fresh machine
 python main.py new-memory --area <name> --type feedback --slug my-slug --description "..."
 python main.py map --area <name>                 # find memory-shaped files scattered outside an area's root
+python main.py cross-check                       # find consolidation candidates ACROSS all configured areas
 ```
 
 `--area` is optional whenever only one area is configured, or for `audit`
@@ -136,6 +166,7 @@ scripts/setup.sh                 # scripts\setup.bat    — pip install deps
 scripts/audit.sh [area]          # scripts\audit.bat [area]   — omit area for all
 scripts/review.sh <area>         # scripts\review.bat <area> — interactive
 scripts/map.sh <area>            # scripts\map.bat <area>
+scripts/cross-check.sh           # scripts\cross-check.bat
 scripts/test.sh                  # scripts\test.bat     — run the pytest suite
 ```
 
@@ -222,6 +253,7 @@ rather than accumulating copies). Once you're satisfied, set
 | `config.py` | Resolve each area's root, load `rules.md` |
 | `scanner.py` | Parse frontmatter + `MEMORY.md` index; `quick_is_memory_file` prefilter for scoped areas |
 | `discovery.py` | Workspace-wide discovery of memory-shaped files for `map` |
+| `crosscheck.py` | `cross-check`: slug conflicts, duplicates, and overlap detection across all areas |
 | `reviewer.py` | Finds non-canonical files needing a user decision |
 | `registry.py` | Persists review decisions (`review_decisions.json`, committed to git) |
 | `checks.py` | All audit checks + compliance score |
