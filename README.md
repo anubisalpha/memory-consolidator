@@ -149,15 +149,38 @@ All thresholds (duplicate similarity, staleness windows, index size limits,
 automation mode) and the area list itself live in [`rules.md`](rules.md) —
 edit the YAML block there, no code changes needed.
 
+## Auto-fix (`apply_safe_fixes` / `full_auto`)
+
+Set `automation.mode: apply_safe_fixes` in `rules.md` (default is
+`report_only`, which never writes anything) to let `audit` fix two specific
+things automatically, in `full` mode areas only — a `scoped` area has no
+single `MEMORY.md` to fix:
+
+- `auto_fix_missing_index_entries` — appends an index line for every orphan
+  file. Only ever *appends*; existing lines are never rewritten.
+- `auto_fix_broken_links` — removes `MEMORY.md` lines whose target file no
+  longer exists. Only ever *removes* lines that are already broken; every
+  valid line is left untouched.
+
+Both are off by default — opt in per flag. Every apply is preceded by a
+snapshot (see [`backup.py`](backup.py)), and `audit` re-runs the checks
+afterward in the same pass so you see the before/after score immediately.
+Neither fix ever touches an individual memory file's body — only
+`MEMORY.md` itself.
+
 ## Safety
 
 - Default mode (`report_only`) never writes to any area's root.
 - Backups and reports are written to `backups/` and `reports/` inside this
-  project. If an area's root happens to contain this project (e.g. auditing
-  your whole workspace root), that's flagged as a warning in `report_only`
-  mode and a hard error in any write mode, since a snapshot could otherwise
-  try to back up itself mid-write.
-- Any future auto-fix mode always snapshots the area's root first.
+  project. If a *specific area being written to* (auto-fix, manual snapshot,
+  or rollback) has a root that contains this project's `backup_dir`, that
+  write is refused with a hard error — a snapshot could otherwise try to
+  back up itself mid-write, or rollback's delete-then-restore could delete
+  the very backup it's restoring from. This check is scoped to the area
+  actually being touched, not every configured area, so an unrelated area's
+  misconfiguration never blocks a `--area`-targeted run.
+- In `report_only` mode this same condition is only a warning, since nothing
+  is written.
 
 ## Project layout
 
@@ -170,6 +193,7 @@ edit the YAML block there, no code changes needed.
 | `reviewer.py` | Finds non-canonical files needing a user decision |
 | `registry.py` | Persists review decisions (`review_decisions.json`, committed to git) |
 | `checks.py` | All audit checks + compliance score |
+| `fixer.py` | Auto-fix logic for `apply_safe_fixes`/`full_auto` (additive-or-strictly-corrective only) |
 | `templates.py` | Fresh-machine bootstrap + compliant file scaffolding |
 | `backup.py` | Snapshot/rollback, isolated from area roots |
 | `report.py` | Console + markdown report rendering, one report per area |

@@ -5,8 +5,9 @@ from pathlib import Path
 
 from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
-from config import ResolvedArea, get_config
+from config import ResolvedArea, ensure_backup_safe_for_area, get_config
 from discovery import discover_external_memory_files
+from fixer import add_missing_index_entries, remove_dead_index_links
 from registry import load_decisions, record_decision, remove_decision
 from report import print_console, write_markdown_report
 from reviewer import find_review_candidates
@@ -64,9 +65,37 @@ def cmd_audit(args) -> None:
 
         if rules["automation"]["mode"] != "report_only":
             backup_dir = Path(rules["paths"]["backup_dir"])
+            ensure_backup_safe_for_area(area, backup_dir)
             snap = create_snapshot(area.root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']}) [{area.name}]")
             print(f"Snapshot created before any apply step: {snap}")
-            print("apply_safe_fixes / full_auto logic not yet implemented — audit-only for now.")
+
+            if area.mode != "full":
+                print(f"Area '{area.name}' is 'scoped' — auto-fix only applies to 'full' mode "
+                      "areas (there's no single MEMORY.md index to fix here).")
+                continue
+
+            auto_cfg = rules["automation"]
+            actions = []
+            if auto_cfg.get("auto_fix_broken_links", False):
+                actions += remove_dead_index_links(area.root, index_entries, index_lines)
+                index_entries, index_lines = parse_index(area.root)
+            if auto_cfg.get("auto_fix_missing_index_entries", False):
+                actions += add_missing_index_entries(area.root, files, index_entries)
+
+            if not actions:
+                print("No auto-fixable issues found (or auto_fix_* flags are disabled in rules.md).")
+                continue
+
+            print(f"Applied {len(actions)} fix(es):")
+            for a in actions:
+                print(f"  - {a}")
+
+            files = scan_memory_files(area.root, area_name=area.name)
+            index_entries, index_lines = parse_index(area.root)
+            new_findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode)
+            new_score = compliance_score(new_findings, len(files))
+            print(f"\nRe-audit after fixes — score: {score:.1f} -> {new_score:.1f}/100 "
+                  f"({len(findings)} -> {len(new_findings)} findings)")
 
 
 def cmd_init(args) -> None:
@@ -186,6 +215,7 @@ def cmd_snapshot(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
     backup_dir = Path(rules["paths"]["backup_dir"])
+    ensure_backup_safe_for_area(area, backup_dir)
     snap = create_snapshot(area.root, backup_dir, reason=args.reason or "manual")
     print(f"Snapshot created: {snap}")
 
@@ -201,6 +231,7 @@ def cmd_rollback(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
     backup_dir = Path(rules["paths"]["backup_dir"])
+    ensure_backup_safe_for_area(area, backup_dir)
     zip_path = rollback(area.root, backup_dir, which=args.which, force=args.force)
     print(f"Rolled back from: {zip_path}")
 

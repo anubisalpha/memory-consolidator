@@ -81,8 +81,11 @@ external_scan:
 
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto
-  auto_fix_missing_index_entries: false   # only used in apply_safe_fixes / full_auto
-  auto_fix_broken_links: false            # only used in apply_safe_fixes / full_auto
+  # Both flags below only take effect in 'full' mode areas (a 'scoped' area
+  # has no single MEMORY.md index to fix) and only under apply_safe_fixes/
+  # full_auto. Both default off — opt in per flag.
+  auto_fix_missing_index_entries: false   # append an index line for each orphan file (never rewrites existing lines)
+  auto_fix_broken_links: false            # remove MEMORY.md lines whose href no longer exists (never touches valid lines)
   require_backup_before_apply: true       # hardcoded safety net, not actually togglable in code
 
 reporting:
@@ -92,8 +95,17 @@ reporting:
 ## Notes
 
 - `automation.mode` is the master switch:
-  - `report_only` — default. Never writes to `memory_root`.
-  - `apply_safe_fixes` — may auto-fix index entries / broken links, always preceded by a backup.
-  - `full_auto` — reserved for future use (acting on duplicates/staleness too). Still always backed up.
-- Backups and reports live in this project folder, never inside `memory_root`, so they
-  can never be picked up by anything that loads `MEMORY.md` into context.
+  - `report_only` — default. Never writes to any area's root.
+  - `apply_safe_fixes` — for `full` mode areas only, gated per-flag by
+    `auto_fix_missing_index_entries` / `auto_fix_broken_links`, always
+    preceded by a snapshot. Both fixes are additive-or-strictly-corrective
+    (see `fixer.py`): missing-index-entries only *appends* lines, and
+    broken-links only *removes* lines whose target no longer exists —
+    neither ever rewrites or reinterprets existing valid content, and
+    neither touches individual memory files, only `MEMORY.md` itself.
+  - `full_auto` — currently behaves identically to `apply_safe_fixes`
+    (reserved for acting on duplicates/staleness too in future). Still
+    always backed up.
+- Backups and reports live in this project folder, never inside any area's
+  root, so they can never be picked up by anything that loads `MEMORY.md`
+  into context.

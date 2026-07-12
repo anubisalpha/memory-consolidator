@@ -123,6 +123,26 @@ def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedAr
     return resolved
 
 
+def backup_dir_conflicts_with_area(area: ResolvedArea, backup_dir: Path) -> bool:
+    return backup_dir == area.root or backup_dir.is_relative_to(area.root)
+
+
+def ensure_backup_safe_for_area(area: ResolvedArea, backup_dir: Path) -> None:
+    """Hard-stop before any write (snapshot/rollback/auto-fix) that would
+    target this specific area, if backup_dir sits inside its root — a
+    snapshot could otherwise try to back up itself mid-write, and rollback's
+    delete-then-restore could delete the very backup it's restoring from.
+    Deliberately NOT called for every configured area up front (get_config
+    used to do this and would block a --area-scoped run over an unrelated
+    area's misconfiguration) — call this only for the area actually being
+    written to."""
+    if backup_dir_conflicts_with_area(area, backup_dir):
+        print(f"ERROR: backup_dir ({backup_dir}) resolves inside area '{area.name}' root "
+              f"({area.root}) — refusing to write (a snapshot/rollback here could corrupt "
+              "itself mid-operation).", file=sys.stderr)
+        sys.exit(1)
+
+
 def get_config(non_interactive: bool = False) -> dict:
     rules = load_rules()
     areas = resolve_areas(rules, non_interactive=non_interactive)
@@ -133,16 +153,11 @@ def get_config(non_interactive: bool = False) -> dict:
     report_dir = Path(rules["paths"]["report_dir"])
 
     for area in areas:
-        backup_inside_root = backup_dir == area.root or backup_dir.is_relative_to(area.root)
-        if backup_inside_root:
-            if rules["automation"]["mode"] != "report_only":
-                print(f"ERROR: backup_dir resolves inside area '{area.name}' root and "
-                      "automation.mode writes to it — refusing to continue (a snapshot "
-                      "could try to back up itself mid-write).", file=sys.stderr)
-                sys.exit(1)
+        if backup_dir_conflicts_with_area(area, backup_dir):
             print(f"WARNING: backup_dir ({backup_dir}) is inside area '{area.name}' root "
-                  f"({area.root}). Harmless in report_only mode, but snapshot/rollback "
-                  "would be unsafe here.", file=sys.stderr)
+                  f"({area.root}). Any write operation targeting this area (auto-fix, "
+                  "manual snapshot, rollback) will refuse to run until this is fixed.",
+                  file=sys.stderr)
 
     backup_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)

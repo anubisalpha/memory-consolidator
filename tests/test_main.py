@@ -108,6 +108,122 @@ def test_cmd_audit_scoped_mode_skips_index_checks(tmp_path, monkeypatch, capsys)
     assert "orphan" not in out  # index-shaped checks don't apply in scoped mode
 
 
+def test_cmd_audit_apply_safe_fixes_adds_missing_index_entries(memory_root, tmp_path, monkeypatch, capsys):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    out = capsys.readouterr().out
+    assert "Applied 1 fix(es)" in out
+    assert "Re-audit after fixes" in out
+
+    from scanner import parse_index
+    entries, _ = parse_index(memory_root)
+    assert {e.href for e in entries} == {"orphan.md"}
+
+
+def test_cmd_audit_apply_safe_fixes_removes_dead_links(memory_root, tmp_path, monkeypatch, capsys):
+    write_index(memory_root, ["- [Ghost](ghost.md) — points nowhere"])
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    assert "Applied 1 fix(es)" in capsys.readouterr().out
+
+    from scanner import parse_index
+    entries, _ = parse_index(memory_root)
+    assert entries == []
+
+
+def test_cmd_audit_apply_safe_fixes_noop_when_nothing_to_fix(memory_root, tmp_path, monkeypatch, capsys):
+    write_memory_file(memory_root, "a.md", "a", "a valid description here", "user", "body")
+    write_index(memory_root, ["- [A](a.md) — a valid description here"])
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    assert "No auto-fixable issues found" in capsys.readouterr().out
+
+
+def test_cmd_audit_apply_safe_fixes_skips_scoped_areas(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "project"
+    mem_dir = root / "memory"
+    mem_dir.mkdir(parents=True)
+    write_memory_file(mem_dir, "a.md", "a", "a valid description here", "user", "body")
+    area = ResolvedArea("proj", root, "scoped")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    assert "auto-fix only applies to 'full' mode" in capsys.readouterr().out
+
+
+def test_cmd_audit_write_mode_not_blocked_by_unrelated_conflicting_area(memory_root, tmp_path, monkeypatch, capsys):
+    """Regression test: an unrelated area whose backup_dir happens to sit
+    inside its own root must not block a write-mode run targeting a
+    different, non-conflicting area (config.py used to validate every
+    configured area up front regardless of --area filtering)."""
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    good_area = ResolvedArea("good", memory_root, "full")
+
+    conflicting_root = tmp_path / "conflicting_project"
+    conflicting_root.mkdir()
+    conflicting_area = ResolvedArea("conflicting", conflicting_root, "scoped")
+
+    rules = make_rules(
+        [good_area, conflicting_area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    # simulate the conflicting area's backup_dir actually being nested inside its root
+    rules["paths"]["backup_dir"] = str(conflicting_root / "backups")
+    (conflicting_root / "backups").mkdir()
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area="good"))
+    out = capsys.readouterr().out
+    assert "Applied 1 fix(es)" in out
+    assert "ERROR" not in out
+
+
+def test_cmd_audit_write_mode_blocked_for_area_with_own_conflict(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "project"
+    root.mkdir()
+    area = ResolvedArea("proj", root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    rules["paths"]["backup_dir"] = str(root / "backups")
+    (root / "backups").mkdir()
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    with pytest.raises(SystemExit):
+        main.cmd_audit(ns(area="proj"))
+    assert "resolves inside area 'proj'" in capsys.readouterr().err
+
+
 def test_cmd_audit_unknown_area_exits(memory_root, tmp_path, monkeypatch, capsys):
     area = ResolvedArea("main", memory_root, "full")
     rules = make_rules([area], tmp_path)
