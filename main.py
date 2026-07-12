@@ -6,11 +6,12 @@ from pathlib import Path
 from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
+from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
 from dryrun import create_dry_run_copy, diff_memory_index
 from fixer import add_missing_index_entries, remove_dead_index_links
 from registry import load_decisions, record_decision, remove_decision
-from report import print_console, write_markdown_report
+from report import print_console, print_cross_area_console, write_cross_area_report, write_markdown_report
 from reviewer import find_review_candidates
 from scanner import parse_index, scan_memory_files, scan_memory_files_scoped
 from templates import bootstrap_memory_folder, scaffold_memory_file
@@ -210,6 +211,36 @@ def cmd_map(args) -> None:
     print("by a 'scoped' area in rules.md.")
 
 
+def cmd_cross_check(args) -> None:
+    """Scan every configured area together and find the same slug or
+    near-duplicate content living in more than one — the consolidation
+    signal for picking a single source of truth. Report-only: never writes
+    anything, so no ensure_backup_safe_for_area guard is needed here."""
+    rules = get_config(non_interactive=args.non_interactive)
+    areas: list[ResolvedArea] = rules["_resolved_areas"]
+    if len(areas) < 2:
+        print("Need at least 2 configured areas to cross-check — nothing to compare.")
+        return
+
+    area_files = {}
+    for area in areas:
+        if area.mode == "full":
+            area_files[area.name] = scan_memory_files(area.root, area_name=area.name)
+        else:
+            area_files[area.name] = scan_memory_files_scoped(
+                area.root, rules.get("memory_file_patterns", []), area_name=area.name)
+
+    findings = find_overlapping_areas(areas)
+    findings += find_cross_area_slug_conflicts(area_files)
+    findings += find_cross_area_duplicates(area_files, rules)
+
+    print_cross_area_console(findings)
+
+    report_dir = Path(rules["paths"]["report_dir"])
+    report_path = write_cross_area_report(findings, report_dir, rules["reporting"]["keep_last_n_reports"])
+    print(f"\nReport written to: {report_path}")
+
+
 def cmd_review(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
@@ -329,6 +360,9 @@ def main() -> None:
     p_map = sub.add_parser("map", help="discover memory-shaped files scattered outside an area's root")
     p_map.add_argument("--area", default=None, help="required if multiple areas are configured")
     p_map.set_defaults(func=cmd_map)
+
+    p_cross = sub.add_parser("cross-check", help="find slug conflicts and near-duplicate content across ALL configured areas")
+    p_cross.set_defaults(func=cmd_cross_check)
 
     p_review = sub.add_parser("review", help="interactively review non-canonical .md files and record a decision")
     p_review.add_argument("--area", default=None, help="required if multiple areas are configured")

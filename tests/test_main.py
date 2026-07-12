@@ -395,6 +395,73 @@ def test_cmd_map_finds_external_files(memory_root, tmp_path, monkeypatch, capsys
     assert "b.md" in out
 
 
+# ---- cmd_cross_check ----
+
+def test_cmd_cross_check_requires_two_areas(memory_root, tmp_path, monkeypatch, capsys):
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_cross_check(ns())
+    assert "Need at least 2 configured areas" in capsys.readouterr().out
+
+
+def test_cmd_cross_check_finds_slug_conflict(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    write_memory_file(root_a, "x.md", "shared-slug", "desc", "user", "version one")
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "a different version two")
+
+    areas = [ResolvedArea("area_a", root_a, "full"), ResolvedArea("area_b", root_b, "full")]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_cross_check(ns())
+    out = capsys.readouterr().out
+    assert "cross_area_slug_conflict" in out
+    assert "DIFFERING content" in out
+    assert "Report written to:" in out
+    assert list((tmp_path / "reports").glob("cross-check_*.md"))
+
+
+def test_cmd_cross_check_no_conflicts(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    write_memory_file(root_a, "x.md", "slug-a", "desc", "user", "unrelated content")
+    write_memory_file(root_b, "y.md", "slug-b", "desc", "user", "totally unrelated other content")
+
+    areas = [ResolvedArea("area_a", root_a, "full"), ResolvedArea("area_b", root_b, "full")]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_cross_check(ns())
+    out = capsys.readouterr().out
+    assert "No cross-area duplicates or slug conflicts found" in out
+
+
+def test_cmd_cross_check_scoped_area_uses_scoped_scan(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    mem_dir = root_a / "memory"
+    mem_dir.mkdir(parents=True)
+    write_memory_file(mem_dir, "x.md", "shared-slug", "desc", "user", "version one")
+
+    root_b = tmp_path / "area_b"
+    root_b.mkdir()
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "version two differs")
+
+    areas = [ResolvedArea("area_a", root_a, "scoped"), ResolvedArea("area_b", root_b, "full")]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_cross_check(ns())
+    out = capsys.readouterr().out
+    assert "cross_area_slug_conflict" in out
+
+
 # ---- cmd_review / review_list / review_forget ----
 
 def test_cmd_review_non_interactive_lists_candidates(memory_root, tmp_path, monkeypatch, capsys):
