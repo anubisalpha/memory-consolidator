@@ -20,6 +20,14 @@ class CrossAreaFinding:
     ref_b: str
 
 
+def _is_pointer_stub(body: str) -> bool:
+    """Matches consolidate.write_pointer_stub's convention (also used by
+    the pre-existing 'pointer only' memory convention). A pointer stub's
+    body is *supposed* to read differently from whatever it points to —
+    that's not an unresolved divergence, it's the resolved state."""
+    return body.strip().lower().startswith("pointer only")
+
+
 def find_overlapping_areas(areas: list) -> list[CrossAreaFinding]:
     """One-time notice (not per-file noise) when one area's root is nested
     inside another's — e.g. a 'scoped' area covering a whole workspace that
@@ -54,11 +62,14 @@ def find_overlapping_areas(areas: list) -> list[CrossAreaFinding]:
 def find_cross_area_slug_conflicts(area_files: dict[str, list[MemoryFile]]) -> list[CrossAreaFinding]:
     """Same `name:` slug used in more than one area. If content differs,
     that's two independent, drifted sources of truth for the same concept —
-    exactly the fragmentation `cross-check` exists to surface."""
+    exactly the fragmentation `cross-check` exists to surface. Pointer
+    stubs (see consolidate.py) are excluded entirely: a stub's body is
+    *supposed* to differ from whatever it points to, so comparing it would
+    re-flag an already-resolved conflict as still diverged."""
     by_name: dict[str, list[tuple[str, MemoryFile]]] = {}
     for area_name, files in area_files.items():
         for f in files:
-            if f.parse_error:
+            if f.parse_error or _is_pointer_stub(f.body):
                 continue
             by_name.setdefault(f.name, []).append((area_name, f))
 
@@ -89,7 +100,10 @@ def find_cross_area_duplicates(area_files: dict[str, list[MemoryFile]], rules: d
     """Near-duplicate content across areas by body similarity, even when
     slugs differ entirely — the same information saved twice under two
     different names in two different areas. Reuses duplicate_detection's
-    thresholds from rules.md so the two commands stay consistent."""
+    thresholds from rules.md so the two commands stay consistent. Pointer
+    stubs are excluded (see find_cross_area_slug_conflicts's docstring —
+    two stubs pointing at the same canonical file are identical by design,
+    not a duplication problem)."""
     cfg = rules.get("duplicate_detection", {})
     if not cfg.get("enabled", True):
         return []
@@ -100,7 +114,8 @@ def find_cross_area_duplicates(area_files: dict[str, list[MemoryFile]], rules: d
     max_pairwise = cfg.get("max_files_for_pairwise", 800)
 
     flat: list[tuple[str, MemoryFile]] = [
-        (area_name, f) for area_name, files in area_files.items() for f in files if not f.parse_error
+        (area_name, f) for area_name, files in area_files.items()
+        for f in files if not f.parse_error and not _is_pointer_stub(f.body)
     ]
     n = len(flat)
     if n > max_pairwise:

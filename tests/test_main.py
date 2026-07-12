@@ -462,6 +462,173 @@ def test_cmd_cross_check_scoped_area_uses_scoped_scan(tmp_path, monkeypatch, cap
     assert "cross_area_slug_conflict" in out
 
 
+# ---- cmd_resolve_conflicts ----
+
+def test_cmd_resolve_conflicts_missing_diverged_area_exits(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    root_a.mkdir()
+    root_b.mkdir()
+    areas = [ResolvedArea("area_a", root_a, "full"), ResolvedArea("area_b", root_b, "full")]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    with pytest.raises(SystemExit):
+        main.cmd_resolve_conflicts(ns(diverged_area=None))
+    assert "no area named 'memory-diverged'" in capsys.readouterr().err
+
+
+def test_cmd_resolve_conflicts_diverged_area_must_be_full_mode(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    diverged_root = tmp_path / "diverged"
+    root_a.mkdir()
+    root_b.mkdir()
+    diverged_root.mkdir()
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("memory-diverged", diverged_root, "scoped"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    with pytest.raises(SystemExit):
+        main.cmd_resolve_conflicts(ns(diverged_area=None))
+    assert "must be mode: full" in capsys.readouterr().err
+
+
+def test_cmd_resolve_conflicts_non_interactive_lists_only(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    diverged_root = tmp_path / "diverged"
+    root_a.mkdir()
+    root_b.mkdir()
+    diverged_root.mkdir()
+    write_memory_file(root_a, "x.md", "shared-slug", "desc", "user", "version one")
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "a differing version two")
+
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("memory-diverged", diverged_root, "full"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_resolve_conflicts(ns(diverged_area=None))
+    out = capsys.readouterr().out
+    assert "1 diverged conflict(s) need resolution" in out
+    # non-interactive must never write anything
+    assert not any(diverged_root.iterdir())
+    assert (root_a / "x.md").read_text(encoding="utf-8") == (root_a / "x.md").read_text(encoding="utf-8")
+
+
+def test_cmd_resolve_conflicts_no_conflicts(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    diverged_root = tmp_path / "diverged"
+    root_a.mkdir()
+    root_b.mkdir()
+    diverged_root.mkdir()
+    write_memory_file(root_a, "x.md", "slug-a", "desc", "user", "content a")
+    write_memory_file(root_b, "y.md", "slug-b", "desc", "user", "content b")
+
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("memory-diverged", diverged_root, "full"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_resolve_conflicts(ns(diverged_area=None))
+    assert "No diverged" in capsys.readouterr().out
+
+
+def test_cmd_resolve_conflicts_interactive_keeps_chosen_version(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    diverged_root = tmp_path / "diverged"
+    root_a.mkdir()
+    root_b.mkdir()
+    diverged_root.mkdir()
+    write_memory_file(root_a, "x.md", "shared-slug", "desc", "user", "the version worth keeping")
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "a stale, differing version")
+
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("memory-diverged", diverged_root, "full"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+    monkeypatch.setattr("builtins.input", lambda _: "a")  # keep area_a's version
+
+    main.cmd_resolve_conflicts(ns(non_interactive=False, diverged_area=None))
+    out = capsys.readouterr().out
+    assert "Resolved 1/1 conflict(s)" in out
+
+    canonical = diverged_root / "shared-slug.md"
+    assert canonical.exists()
+    assert "the version worth keeping" in canonical.read_text(encoding="utf-8")
+
+    stub_a = (root_a / "x.md").read_text(encoding="utf-8")
+    stub_b = (root_b / "x.md").read_text(encoding="utf-8")
+    assert "Pointer only" in stub_a
+    assert "Pointer only" in stub_b
+    assert "the version worth keeping" not in stub_a  # body was replaced, not appended to
+
+
+def test_cmd_resolve_conflicts_skip_leaves_files_untouched(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    diverged_root = tmp_path / "diverged"
+    root_a.mkdir()
+    root_b.mkdir()
+    diverged_root.mkdir()
+    write_memory_file(root_a, "x.md", "shared-slug", "desc", "user", "version one")
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "a differing version two")
+
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("memory-diverged", diverged_root, "full"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+    monkeypatch.setattr("builtins.input", lambda _: "s")  # skip
+
+    main.cmd_resolve_conflicts(ns(non_interactive=False, diverged_area=None))
+    out = capsys.readouterr().out
+    assert "Resolved 0/1 conflict(s)" in out
+    assert "version one" in (root_a / "x.md").read_text(encoding="utf-8")
+    assert not any(diverged_root.iterdir())
+
+
+def test_cmd_resolve_conflicts_custom_diverged_area_name(tmp_path, monkeypatch, capsys):
+    root_a = tmp_path / "area_a"
+    root_b = tmp_path / "area_b"
+    custom_diverged = tmp_path / "custom"
+    root_a.mkdir()
+    root_b.mkdir()
+    custom_diverged.mkdir()
+    write_memory_file(root_a, "x.md", "shared-slug", "desc", "user", "version one")
+    write_memory_file(root_b, "x.md", "shared-slug", "desc", "user", "a differing version two")
+
+    areas = [
+        ResolvedArea("area_a", root_a, "full"),
+        ResolvedArea("area_b", root_b, "full"),
+        ResolvedArea("my-custom-name", custom_diverged, "full"),
+    ]
+    rules = make_rules(areas, tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+    monkeypatch.setattr("builtins.input", lambda _: "a")
+
+    main.cmd_resolve_conflicts(ns(non_interactive=False, diverged_area="my-custom-name"))
+    assert (custom_diverged / "shared-slug.md").exists()
+
+
 # ---- cmd_review / review_list / review_forget ----
 
 def test_cmd_review_non_interactive_lists_candidates(memory_root, tmp_path, monkeypatch, capsys):

@@ -187,3 +187,35 @@ def test_overlapping_areas_same_physical_file_not_flagged_as_slug_conflict(tmp_p
     }
     findings = find_cross_area_slug_conflicts(area_files)
     assert findings == []  # same resolved path on both sides -> deduped, not a real conflict
+
+
+# ---- pointer stub exclusion ----
+
+def test_pointer_stub_not_flagged_as_slug_conflict_with_canonical(tmp_path):
+    stub_area = tmp_path / "stub_area"
+    canonical_area = tmp_path / "diverged"
+    stub_area.mkdir()
+    canonical_area.mkdir()
+
+    write_memory_file(stub_area, "x.md", "shared-slug", "desc", "project",
+                       "Pointer only; consolidated into the 'memory-diverged' area — full details in `x.md`.")
+    write_memory_file(canonical_area, "x.md", "shared-slug", "desc", "project",
+                       "The real, full consolidated content lives here.")
+
+    area_files = {"stub_area": scan_memory_files(stub_area), "diverged": scan_memory_files(canonical_area)}
+    findings = find_cross_area_slug_conflicts(area_files)
+    assert findings == []  # must not re-flag the resolved state as still diverged
+
+
+def test_pointer_stub_not_flagged_as_cross_area_duplicate(tmp_path):
+    stub_a = tmp_path / "stub_a"
+    stub_b = tmp_path / "stub_b"
+    stub_a.mkdir()
+    stub_b.mkdir()
+    pointer_text = "Pointer only; consolidated into the 'memory-diverged' area — full details in `x.md`."
+    write_memory_file(stub_a, "x.md", "shared-slug", "desc", "project", pointer_text)
+    write_memory_file(stub_b, "x.md", "shared-slug", "desc", "project", pointer_text)
+
+    area_files = {"stub_a": scan_memory_files(stub_a), "stub_b": scan_memory_files(stub_b)}
+    findings = find_cross_area_duplicates(area_files, DEFAULT_RULES)
+    assert findings == []  # two identical stubs are expected, not a duplication problem

@@ -1,11 +1,13 @@
 """CLI entrypoint for the memory consolidator (no model inference — pure heuristics)."""
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
+from consolidate import write_canonical_file, write_pointer_stub
 from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
 from dryrun import create_dry_run_copy, diff_memory_index
@@ -241,6 +243,103 @@ def cmd_cross_check(args) -> None:
     print(f"\nReport written to: {report_path}")
 
 
+def cmd_resolve_conflicts(args) -> None:
+    """Interactively resolve cross-area slug conflicts with genuinely
+    diverged content (the 'critical' findings from cross-check). For each,
+    the user picks which version to keep; the chosen content is written into
+    a dedicated 'memory-diverged' area, and BOTH original files become
+    pointer stubs referencing it there — never a direct cross-link between
+    the two original areas, so moving/deleting either one later can't break
+    the reference (see consolidate.py)."""
+    rules = get_config(non_interactive=args.non_interactive)
+    areas: list[ResolvedArea] = rules["_resolved_areas"]
+
+    diverged_name = args.diverged_area or "memory-diverged"
+    diverged_matches = [a for a in areas if a.name == diverged_name]
+    if not diverged_matches:
+        print(f"ERROR: no area named '{diverged_name}' is configured. Add a 'mode: full' area "
+              f"named '{diverged_name}' to rules.md to hold consolidated content, then re-run "
+              f"(or pass --diverged-area to use a different name).", file=sys.stderr)
+        sys.exit(1)
+    diverged_area = diverged_matches[0]
+    if diverged_area.mode != "full":
+        print(f"ERROR: area '{diverged_name}' must be mode: full (it needs to be a plain memory "
+              "folder, not a whole-project scope).", file=sys.stderr)
+        sys.exit(1)
+
+    other_areas = [a for a in areas if a.name != diverged_name]
+    if len(other_areas) < 2:
+        print("Need at least 2 non-diverged areas configured to compare — nothing to resolve.")
+        return
+
+    area_files = {}
+    for area in other_areas:
+        if area.mode == "full":
+            area_files[area.name] = scan_memory_files(area.root, area_name=area.name)
+        else:
+            area_files[area.name] = scan_memory_files_scoped(
+                area.root, rules.get("memory_file_patterns", []), area_name=area.name)
+
+    conflicts = find_cross_area_slug_conflicts(area_files)
+    critical = [f for f in conflicts if f.severity == "critical"]
+
+    if not critical:
+        print("No diverged (differing-content) cross-area slug conflicts to resolve.")
+        return
+
+    if args.non_interactive:
+        print(f"{len(critical)} diverged conflict(s) need resolution "
+              "(run without --non-interactive to resolve):")
+        for f in critical:
+            print(f"  {f.message}")
+            print(f"    [{f.area_a}] {f.ref_a}")
+            print(f"    [{f.area_b}] {f.ref_b}")
+        return
+
+    backup_dir = Path(rules["paths"]["backup_dir"])
+    involved_names = {f.area_a for f in critical} | {f.area_b for f in critical} | {diverged_name}
+    involved = [a for a in areas if a.name in involved_names]
+    for area in involved:
+        ensure_backup_safe_for_area(area, backup_dir)
+    for area in involved:
+        create_snapshot(area.root, backup_dir, reason=f"pre-resolve-conflicts [{area.name}]")
+    print(f"Snapshotted {len(involved)} area(s) before resolving: {', '.join(a.name for a in involved)}\n")
+
+    file_lookup = {}
+    for area_name, files in area_files.items():
+        for f in files:
+            file_lookup[(area_name, str(f.path))] = f
+
+    resolved_count = 0
+    for finding in critical:
+        fa = file_lookup.get((finding.area_a, finding.ref_a))
+        fb = file_lookup.get((finding.area_b, finding.ref_b))
+        if fa is None or fb is None:
+            continue
+        slug = fa.name
+
+        print(f"--- slug '{slug}' ---")
+        print(f"[a] {finding.area_a}: {finding.ref_a}")
+        print(fa.body.strip()[:400])
+        print(f"\n[b] {finding.area_b}: {finding.ref_b}")
+        print(fb.body.strip()[:400])
+
+        answer = input("\nKeep [a], keep [b], or [s]kip: ").strip().lower()
+        if answer not in ("a", "b"):
+            print("Skipped.\n")
+            continue
+
+        chosen, area_choice = (fa, finding.area_a) if answer == "a" else (fb, finding.area_b)
+        note = f"kept the '{area_choice}' version on {date.today().isoformat()}, resolving a divergence with '{finding.area_b if answer == 'a' else finding.area_a}'"
+        canonical_path = write_canonical_file(diverged_area.root, slug, chosen, note)
+        write_pointer_stub(fa, canonical_path, diverged_name)
+        write_pointer_stub(fb, canonical_path, diverged_name)
+        print(f"Consolidated '{slug}' -> {canonical_path}\n")
+        resolved_count += 1
+
+    print(f"Resolved {resolved_count}/{len(critical)} conflict(s).")
+
+
 def cmd_review(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
@@ -363,6 +462,10 @@ def main() -> None:
 
     p_cross = sub.add_parser("cross-check", help="find slug conflicts and near-duplicate content across ALL configured areas")
     p_cross.set_defaults(func=cmd_cross_check)
+
+    p_resolve = sub.add_parser("resolve-conflicts", help="interactively resolve diverged cross-area slug conflicts into a 'memory-diverged' area")
+    p_resolve.add_argument("--diverged-area", default=None, help="area name to consolidate into (default: 'memory-diverged')")
+    p_resolve.set_defaults(func=cmd_resolve_conflicts)
 
     p_review = sub.add_parser("review", help="interactively review non-canonical .md files and record a decision")
     p_review.add_argument("--area", default=None, help="required if multiple areas are configured")
