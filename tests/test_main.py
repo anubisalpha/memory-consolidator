@@ -178,6 +178,86 @@ def test_cmd_audit_apply_safe_fixes_skips_scoped_areas(tmp_path, monkeypatch, ca
     assert "auto-fix only applies to 'full' mode" in capsys.readouterr().out
 
 
+def test_cmd_audit_full_auto_merges_exact_duplicates(memory_root, tmp_path, monkeypatch, capsys):
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "z.md", "z", "desc z", "user", body)
+    write_index(memory_root, ["- [A](a.md) — desc a", "- [Z](z.md) — desc z"])
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "full_auto", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": False, "auto_fix_mark_stale": False,
+                    "auto_fix_merge_exact_duplicates": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    out = capsys.readouterr().out
+    assert "Applied 1 fix(es)" in out
+    assert "merged exact duplicate" in out
+
+    from scanner import parse_memory_file
+    z_reparsed = parse_memory_file(memory_root / "z.md")
+    assert z_reparsed.body.strip().lower().startswith("pointer only")
+
+
+def test_cmd_audit_full_auto_marks_stale(memory_root, tmp_path, monkeypatch, capsys):
+    from datetime import date, timedelta
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc a", "project",
+                       f"decided on {old_date}\n\n**Why:** x\n**How to apply:** y")
+    write_index(memory_root, ["- [A](a.md) — desc a"])
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "full_auto", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": False, "auto_fix_mark_stale": True,
+                    "auto_fix_merge_exact_duplicates": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    out = capsys.readouterr().out
+    assert "Applied 1 fix(es)" in out
+    assert "marked stale" in out
+
+    from scanner import parse_memory_file
+    reparsed = parse_memory_file(memory_root / "a.md")
+    assert reparsed.body.startswith("> ⚠ **Possibly stale**")
+
+
+def test_cmd_audit_apply_safe_fixes_does_not_mark_stale_or_merge_duplicates(memory_root, tmp_path, monkeypatch, capsys):
+    # regression guard: apply_safe_fixes must never touch individual file
+    # bodies, even if auto_fix_mark_stale/auto_fix_merge_exact_duplicates
+    # were left enabled in rules.md — those two flags only take effect
+    # under full_auto (see main._apply_fixes)
+    from datetime import date, timedelta
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "project", f"decided on {old_date}")
+    write_memory_file(memory_root, "b.md", "b", "desc b", "user", body)
+    write_memory_file(memory_root, "c.md", "c", "desc c", "user", body)
+    write_index(memory_root, [
+        "- [A](a.md) — desc a", "- [B](b.md) — desc b", "- [C](c.md) — desc c",
+    ])
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": False, "auto_fix_mark_stale": True,
+                    "auto_fix_merge_exact_duplicates": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_audit(ns(area=None))
+    assert "No auto-fixable issues found" in capsys.readouterr().out
+
+    from scanner import parse_memory_file
+    assert not parse_memory_file(memory_root / "a.md").body.startswith("> ⚠")
+    assert not parse_memory_file(memory_root / "c.md").body.strip().lower().startswith("pointer only")
+
+
 def test_cmd_audit_write_mode_not_blocked_by_unrelated_conflicting_area(memory_root, tmp_path, monkeypatch, capsys):
     """Regression test: an unrelated area whose backup_dir happens to sit
     inside its own root must not block a write-mode run targeting a

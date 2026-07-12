@@ -1,5 +1,7 @@
-from fixer import add_missing_index_entries, remove_dead_index_links
-from scanner import parse_index, scan_memory_files
+from datetime import date, timedelta
+
+from fixer import add_missing_index_entries, mark_stale_files, merge_exact_duplicates, remove_dead_index_links
+from scanner import parse_index, parse_memory_file, scan_memory_files
 
 from .conftest import write_index, write_memory_file
 
@@ -109,3 +111,100 @@ def test_remove_dead_index_links_noop_when_all_valid(memory_root):
     write_index(memory_root, ["- [Real](real.md) — a real memory"])
     index_entries, index_lines = parse_index(memory_root)
     assert remove_dead_index_links(memory_root, index_entries, index_lines) == []
+
+
+# ---- mark_stale_files ----
+
+def test_mark_stale_files_marks_old_dated_project_memory(memory_root, rules):
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc", "project", f"decided on {old_date}\n\n**Why:** x\n**How to apply:** y")
+    files = scan_memory_files(memory_root)
+    actions = mark_stale_files(files, rules)
+
+    assert len(actions) == 1
+    reparsed = parse_memory_file(memory_root / "a.md")
+    assert reparsed.body.startswith("> ⚠ **Possibly stale**")
+    assert reparsed.parse_error is None
+    assert reparsed.name == "a"
+
+
+def test_mark_stale_files_idempotent_on_rerun(memory_root, rules):
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc", "project", f"decided on {old_date}")
+    files = scan_memory_files(memory_root)
+    mark_stale_files(files, rules)
+
+    files_again = scan_memory_files(memory_root)
+    actions = mark_stale_files(files_again, rules)
+    assert actions == []  # already marked — must not stack a second marker
+
+    reparsed = parse_memory_file(memory_root / "a.md")
+    assert reparsed.body.count("Possibly stale") == 1
+
+
+def test_mark_stale_files_skips_recent_dates(memory_root, rules):
+    recent_date = (date.today() - timedelta(days=5)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc", "project", f"decided on {recent_date}")
+    files = scan_memory_files(memory_root)
+    assert mark_stale_files(files, rules) == []
+
+
+def test_mark_stale_files_disabled(memory_root, rules):
+    rules["staleness"]["enabled"] = False
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc", "project", f"decided on {old_date}")
+    files = scan_memory_files(memory_root)
+    assert mark_stale_files(files, rules) == []
+
+
+# ---- merge_exact_duplicates ----
+
+def test_merge_exact_duplicates_stubs_the_alphabetically_later_file(memory_root, rules):
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "z.md", "z", "desc z", "user", body)
+    files = scan_memory_files(memory_root)
+    actions = merge_exact_duplicates(files, rules)
+
+    assert len(actions) == 1
+    assert "z.md -> a.md" in actions[0]
+
+    a_reparsed = parse_memory_file(memory_root / "a.md")
+    z_reparsed = parse_memory_file(memory_root / "z.md")
+    assert not a_reparsed.body.strip().lower().startswith("pointer only")
+    assert z_reparsed.body.strip().lower().startswith("pointer only")
+    assert "a.md" in z_reparsed.body
+    assert z_reparsed.parse_error is None
+    assert z_reparsed.name == "z"  # own identity preserved, only body replaced
+
+
+def test_merge_exact_duplicates_ignores_non_identical(memory_root, rules):
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", "content one, long enough to pass the floor here")
+    write_memory_file(memory_root, "b.md", "b", "desc b", "user", "content two, long enough to pass the floor here")
+    files = scan_memory_files(memory_root)
+    assert merge_exact_duplicates(files, rules) == []
+
+
+def test_merge_exact_duplicates_respects_type_boundary(memory_root, rules):
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b", "project", body)
+    files = scan_memory_files(memory_root)
+    assert merge_exact_duplicates(files, rules) == []
+
+
+def test_merge_exact_duplicates_skips_existing_pointer_stubs(memory_root, rules):
+    stub_body = "Pointer only; consolidated into the 'memory-diverged' area — full details in `memory-diverged/x.md`.\n"
+    write_memory_file(memory_root, "a.md", "a", "desc a", "project", stub_body)
+    write_memory_file(memory_root, "b.md", "b", "desc b", "project", stub_body)
+    files = scan_memory_files(memory_root)
+    assert merge_exact_duplicates(files, rules) == []
+
+
+def test_merge_exact_duplicates_disabled(memory_root, rules):
+    rules["duplicate_detection"]["enabled"] = False
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "z.md", "z", "desc z", "user", body)
+    files = scan_memory_files(memory_root)
+    assert merge_exact_duplicates(files, rules) == []

@@ -239,11 +239,33 @@ single `MEMORY.md` to fix:
   longer exists. Only ever *removes* lines that are already broken; every
   valid line is left untouched.
 
-Both are off by default — opt in per flag. Every apply is preceded by a
-snapshot (see [`backup.py`](backup.py)), and `audit` re-runs the checks
-afterward in the same pass so you see the before/after score immediately.
-Neither fix ever touches an individual memory file's body — only
-`MEMORY.md` itself.
+Every apply is preceded by a snapshot (see [`backup.py`](backup.py)), and
+`audit` re-runs the checks afterward in the same pass so you see the
+before/after score immediately. Neither fix ever touches an individual
+memory file's body — only `MEMORY.md` itself.
+
+Set `automation.mode: full_auto` to also enable two more fixes, gated by
+their own flags, that run in addition to whichever `apply_safe_fixes` flags
+above are enabled:
+
+- `auto_fix_mark_stale` — prepends a visible `> ⚠ **Possibly stale**` marker
+  to files flagged by `check_staleness`'s date-based signal (not the
+  low-confidence mtime fallback). Idempotent — a file that already carries
+  the marker is skipped on the next run, so it's never stacked or reset.
+- `auto_fix_merge_exact_duplicates` — rewrites the alphabetically-later file
+  of a byte-identical pair (`ratio == 1.0`, not the near-duplicate
+  thresholds `check_duplicates` reports) into a pointer stub referencing the
+  earlier one as canonical.
+
+Both are a deliberate exception to "never touches an individual memory
+file's body" — they only take effect under `full_auto`, never
+`apply_safe_fixes`, and each stays content-preserving in its own way (the
+stale marker only prepends, never removes; the duplicate merge only acts on
+exact matches, so nothing distinguishable is lost). Anything short of an
+exact duplicate is left as a judgment call for a human, same as cross-area
+conflicts are left to `resolve-conflicts`.
+
+All four flags are off unless set in `rules.md` — opt in per flag.
 
 An area can also set `index_header` in `rules.md` — used only when
 `auto_fix_missing_index_entries` creates a brand-new `MEMORY.md` (an
