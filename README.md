@@ -1,5 +1,7 @@
 # Memory Consolidator
 
+[MIT licensed](LICENSE)
+
 A portable, deterministic Python tool that audits a folder of Claude memory
 files (frontmatter + `MEMORY.md` index) and reports consolidation
 opportunities — duplicates, stale entries, broken links, index drift.
@@ -102,7 +104,7 @@ python main.py review-forget --area <name> <rel/path.md>   # undo a decision
 ## Usage
 
 ```bash
-pip install pyyaml
+pip install -r requirements.txt
 
 python main.py audit                     # audit every configured area, one report each
 python main.py audit --area claudecore-project   # audit just one area
@@ -176,6 +178,6 @@ edit the YAML block there, no code changes needed.
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```

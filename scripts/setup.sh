@@ -15,5 +15,5 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-"$PY" -m pip install pyyaml pytest
+"$PY" -m pip install -r requirements-dev.txt
 echo "Setup complete. Try: scripts/audit.sh"
