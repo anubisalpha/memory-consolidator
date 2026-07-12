@@ -35,6 +35,14 @@ areas:
   - name: memory-diverged
     root: "C:/Users/marca/claudecore/memory-diverged"
     mode: full
+    index_header: |
+      # Memory Index — Consolidation Staging Area
+
+      This folder holds content consolidated from diverged cross-area memories
+      (see `projects/memory-consolidator/`, `resolve-conflicts` command). It is
+      NOT part of Claude's auto-loaded memory system — nothing here is read
+      automatically by any session. Reference these files manually/explicitly
+      if you need the full history behind a consolidation decision.
 
 memory_file_patterns:
   # Used by `mode: scoped` areas and by `map`, to decide what counts as a
@@ -104,7 +112,7 @@ automation:
   # Both flags below only take effect in 'full' mode areas (a 'scoped' area
   # has no single MEMORY.md index to fix) and only under apply_safe_fixes/
   # full_auto. Both default off — opt in per flag.
-  auto_fix_missing_index_entries: false   # append an index line for each orphan file (never rewrites existing lines)
+  auto_fix_missing_index_entries: true   # append an index line for each orphan file (never rewrites existing lines)
   auto_fix_broken_links: false            # remove MEMORY.md lines whose href no longer exists (never touches valid lines)
   require_backup_before_apply: true       # hardcoded safety net, not actually togglable in code
 

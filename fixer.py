@@ -9,10 +9,21 @@ from pathlib import Path
 from scanner import IndexEntry, MemoryFile
 
 
+DEFAULT_INDEX_HEADER = "# Memory Index\n\n"
+
+
 def add_missing_index_entries(area_root: Path, files: list[MemoryFile],
-                               index_entries: list[IndexEntry]) -> list[str]:
+                               index_entries: list[IndexEntry],
+                               index_header: str | None = None) -> list[str]:
     """Appends one line per orphan file (a real memory file with no MEMORY.md
-    entry) to the index. Only ever appends — never rewrites existing lines."""
+    entry) to the index. Only ever appends — never rewrites existing lines.
+
+    index_header is only used when MEMORY.md doesn't exist yet (an existing
+    index's header is never touched, appends-only applies there too). Comes
+    from the area's `index_header` in rules.md — e.g. a consolidation
+    staging area can carry an explanatory note ("not part of Claude's
+    auto-loaded memory system") baked in from the very first write, rather
+    than relying on someone remembering to add it by hand."""
     indexed_hrefs = {e.href for e in index_entries}
     orphans = []
     for f in files:
@@ -28,7 +39,10 @@ def add_missing_index_entries(area_root: Path, files: list[MemoryFile],
 
     index_path = area_root / "MEMORY.md"
     if not index_path.exists():
-        index_path.write_text("# Memory Index\n\n", encoding="utf-8")
+        header = index_header if index_header is not None else DEFAULT_INDEX_HEADER
+        if not header.endswith("\n"):
+            header += "\n"
+        index_path.write_text(header, encoding="utf-8")
     elif index_path.stat().st_size > 0:
         existing = index_path.read_text(encoding="utf-8")
         if not existing.endswith("\n"):

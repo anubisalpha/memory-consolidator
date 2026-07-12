@@ -53,6 +53,33 @@ def test_add_missing_index_entries_creates_index_if_missing(memory_root):
     assert (memory_root / "MEMORY.md").exists()
 
 
+def test_add_missing_index_entries_uses_custom_header_for_new_index(memory_root):
+    write_memory_file(memory_root, "a.md", "a", "a memory", "user", "body")
+    custom_header = "# Special Area\n\nThis is not auto-loaded — reference manually.\n\n"
+    add_missing_index_entries(memory_root, scan_memory_files(memory_root), [], index_header=custom_header)
+    content = (memory_root / "MEMORY.md").read_text(encoding="utf-8")
+    assert content.startswith("# Special Area")
+    assert "not auto-loaded" in content
+    assert "- [A](a.md)" in content
+
+
+def test_add_missing_index_entries_custom_header_gets_trailing_newline(memory_root):
+    write_memory_file(memory_root, "a.md", "a", "a memory", "user", "body")
+    add_missing_index_entries(memory_root, scan_memory_files(memory_root), [], index_header="# No trailing newline")
+    content = (memory_root / "MEMORY.md").read_text(encoding="utf-8")
+    assert "# No trailing newline\n- [A]" in content or "# No trailing newline\n\n- [A]" in content
+
+
+def test_add_missing_index_entries_custom_header_not_used_when_index_already_exists(memory_root):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    write_index(memory_root, ["# Existing Header", "", "- [Other](other.md) — pre-existing"])
+    add_missing_index_entries(memory_root, scan_memory_files(memory_root), [],
+                               index_header="# Should Not Appear")
+    content = (memory_root / "MEMORY.md").read_text(encoding="utf-8")
+    assert "Should Not Appear" not in content
+    assert "# Existing Header" in content  # untouched
+
+
 def test_add_missing_index_entries_noop_when_all_indexed(memory_root):
     write_memory_file(memory_root, "a.md", "a", "a memory", "user", "body")
     write_index(memory_root, ["- [A](a.md) — a memory"])

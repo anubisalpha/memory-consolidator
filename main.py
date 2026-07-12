@@ -19,7 +19,8 @@ from scanner import parse_index, scan_memory_files, scan_memory_files_scoped
 from templates import bootstrap_memory_folder, scaffold_memory_file
 
 
-def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict) -> list[str]:
+def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict,
+                  index_header: str | None = None) -> list[str]:
     """Shared by cmd_audit (applies for real) and cmd_dry_run (applies to a
     disposable copy) so the two paths can never drift apart."""
     auto_cfg = rules["automation"]
@@ -28,7 +29,7 @@ def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict) -> 
         actions += remove_dead_index_links(root, index_entries, index_lines)
         index_entries, index_lines = parse_index(root)
     if auto_cfg.get("auto_fix_missing_index_entries", False):
-        actions += add_missing_index_entries(root, files, index_entries)
+        actions += add_missing_index_entries(root, files, index_entries, index_header=index_header)
     return actions
 
 
@@ -91,7 +92,8 @@ def cmd_audit(args) -> None:
                       "areas (there's no single MEMORY.md index to fix here).")
                 continue
 
-            actions = _apply_fixes(area.root, files, index_entries, index_lines, rules)
+            actions = _apply_fixes(area.root, files, index_entries, index_lines, rules,
+                                    index_header=area.index_header)
 
             if not actions:
                 print("No auto-fixable issues found (or auto_fix_* flags are disabled in rules.md).")
@@ -135,7 +137,8 @@ def cmd_dry_run(args) -> None:
 
     files = scan_memory_files(staging_dir, area_name=area.name)
     index_entries, index_lines = parse_index(staging_dir)
-    actions = _apply_fixes(staging_dir, files, index_entries, index_lines, rules)
+    actions = _apply_fixes(staging_dir, files, index_entries, index_lines, rules,
+                            index_header=area.index_header)
 
     if not actions:
         print("Dry run: no auto-fixable issues found — nothing would change.")

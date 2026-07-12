@@ -232,3 +232,23 @@ def test_resolve_areas_allows_unique_names(tmp_path):
     }
     areas = resolve_areas(rules, non_interactive=True)
     assert [a.name for a in areas] == ["one", "two"]
+
+
+def test_resolve_areas_reads_index_header(tmp_path):
+    root = tmp_path / "diverged"
+    root.mkdir()
+    rules = {
+        "areas": [
+            {"name": "diverged", "root": str(root), "mode": "full", "index_header": "# Custom\n\n"},
+        ]
+    }
+    areas = resolve_areas(rules, non_interactive=True)
+    assert areas[0].index_header == "# Custom\n\n"
+
+
+def test_resolve_areas_index_header_defaults_to_none(tmp_path):
+    root = tmp_path / "plain"
+    root.mkdir()
+    rules = {"areas": [{"name": "plain", "root": str(root), "mode": "full"}]}
+    areas = resolve_areas(rules, non_interactive=True)
+    assert areas[0].index_header is None

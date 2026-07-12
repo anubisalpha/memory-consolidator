@@ -36,6 +36,7 @@ class ResolvedArea:
     name: str
     root: Path
     mode: str  # "full" | "scoped"
+    index_header: str | None = None  # written by fixer.py when creating a fresh MEMORY.md for this area
 
 
 def load_rules() -> dict:
@@ -129,7 +130,7 @@ def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedAr
         else:
             root = _resolve_null_root(name, non_interactive)
 
-        resolved.append(ResolvedArea(name=name, root=root, mode=mode))
+        resolved.append(ResolvedArea(name=name, root=root, mode=mode, index_header=entry.get("index_header")))
     return resolved
 
 
