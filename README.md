@@ -149,6 +149,15 @@ All thresholds (duplicate similarity, staleness windows, index size limits,
 automation mode) and the area list itself live in [`rules.md`](rules.md) —
 edit the YAML block there, no code changes needed.
 
+`external_scan.workspace_root` (used by `map` and pointer-target checking)
+auto-derives from `areas` when left `null` — but only when exactly one area
+has `mode: scoped`, since its root is the unambiguous choice. With zero or
+multiple scoped areas it's genuinely ambiguous which one is "the workspace"
+(and naively taking the common ancestor across all areas can balloon to your
+entire home directory if a `full` mode area lives deep under something like
+`~/.claude/projects/...`), so an explicit path is required in that case —
+`rules.md` documents this inline.
+
 ## Auto-fix (`apply_safe_fixes` / `full_auto`)
 
 Set `automation.mode: apply_safe_fixes` in `rules.md` (default is

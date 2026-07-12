@@ -77,7 +77,16 @@ external_scan:
   # "full details in `some/path.md`" — that target usually lives in a
   # different area's root, so the normal dead-link check can't see it.
   enabled: true
-  workspace_root: "C:/Users/marca/claudecore"   # root searched for pointer targets
+  # null = auto-derive from `areas`, but ONLY when exactly one area has
+  # mode: scoped (its root is used directly — see derive_workspace_root in
+  # config.py). With zero or multiple scoped areas — as here, we have two
+  # (claudecore-project, dot-claude) — it's ambiguous which one should be
+  # "the workspace", so an explicit override is required; leaving this null
+  # in that case disables map/pointer-target checking rather than guessing
+  # something overly broad (e.g. never the common ancestor across areas —
+  # that can balloon to the whole home directory and turn `map` into an
+  # accidental full-disk walk).
+  workspace_root: "C:/Users/marca/claudecore"
 
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto

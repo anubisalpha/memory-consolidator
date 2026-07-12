@@ -123,6 +123,25 @@ def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedAr
     return resolved
 
 
+def derive_workspace_root(areas: list[ResolvedArea]) -> Path | None:
+    """Best-effort root for `map` and external-pointer resolution, derived
+    from the configured `areas` instead of a hand-maintained separate value.
+
+    Deliberately narrow: only auto-derives when there's exactly one 'scoped'
+    area, using its root directly. Taking the common ancestor across ALL
+    areas is tempting but dangerous — a 'full' mode area often lives deep
+    under something like ~/.claude/projects/.../memory, so its common
+    ancestor with a 'scoped' area can balloon to the entire home directory,
+    turning a targeted search into an accidental full-disk walk. With zero
+    or multiple scoped areas there's no single unambiguous choice, so this
+    returns None and callers fall back to requiring an explicit
+    workspace_root override in rules.md."""
+    scoped = [a for a in areas if a.mode == "scoped"]
+    if len(scoped) == 1:
+        return scoped[0].root
+    return None
+
+
 def backup_dir_conflicts_with_area(area: ResolvedArea, backup_dir: Path) -> bool:
     return backup_dir == area.root or backup_dir.is_relative_to(area.root)
 
@@ -161,6 +180,13 @@ def get_config(non_interactive: bool = False) -> dict:
 
     backup_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
+
+    ext_cfg = rules.get("external_scan") or {}
+    if ext_cfg.get("enabled", False) and not ext_cfg.get("workspace_root"):
+        derived = derive_workspace_root(areas)
+        if derived:
+            ext_cfg["workspace_root"] = str(derived)
+    rules["external_scan"] = ext_cfg
 
     rules["_resolved_areas"] = areas
     return rules
