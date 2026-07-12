@@ -168,6 +168,29 @@ afterward in the same pass so you see the before/after score immediately.
 Neither fix ever touches an individual memory file's body — only
 `MEMORY.md` itself.
 
+### Preview first with `dry-run`
+
+Before flipping `automation.mode` to `apply_safe_fixes` for real, preview
+the exact impact:
+
+```bash
+python main.py dry-run --area <name>
+```
+
+This copies the area's root to a disposable staging folder under
+`backups/dryrun_<area>/` (see [`dryrun.py`](dryrun.py)), applies whichever
+`auto_fix_*` flags are enabled to *that copy only*, and shows:
+
+- the list of fixes that would apply
+- a unified diff of `MEMORY.md` (before vs. after)
+- the compliance score before vs. after, projected
+
+The real area is never touched — `dry-run` works regardless of
+`automation.mode`. The staging copy is left in place afterward so you can
+inspect it directly (a second `dry-run` for the same area overwrites it
+rather than accumulating copies). Once you're satisfied, set
+`automation.mode: apply_safe_fixes` and run `audit --area <name>` for real.
+
 ## Safety
 
 - Default mode (`report_only`) never writes to any area's root.
@@ -194,6 +217,7 @@ Neither fix ever touches an individual memory file's body — only
 | `registry.py` | Persists review decisions (`review_decisions.json`, committed to git) |
 | `checks.py` | All audit checks + compliance score |
 | `fixer.py` | Auto-fix logic for `apply_safe_fixes`/`full_auto` (additive-or-strictly-corrective only) |
+| `dryrun.py` | `dry-run` command: preview fixes on a disposable copy + diff, never touches the real area |
 | `templates.py` | Fresh-machine bootstrap + compliant file scaffolding |
 | `backup.py` | Snapshot/rollback, isolated from area roots |
 | `report.py` | Console + markdown report rendering, one report per area |

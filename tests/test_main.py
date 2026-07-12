@@ -224,6 +224,91 @@ def test_cmd_audit_write_mode_blocked_for_area_with_own_conflict(tmp_path, monke
     assert "resolves inside area 'proj'" in capsys.readouterr().err
 
 
+# ---- cmd_dry_run ----
+
+def test_cmd_dry_run_previews_without_touching_real_area(memory_root, tmp_path, monkeypatch, capsys):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "report_only", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+    out = capsys.readouterr().out
+    assert "WOULD be applied" in out
+    assert "Score if applied" in out
+    assert "MEMORY.md diff" in out
+
+    # the real area must be completely untouched
+    from scanner import parse_index
+    entries, _ = parse_index(memory_root)
+    assert entries == []
+
+
+def test_cmd_dry_run_creates_inspectable_staging_copy(memory_root, tmp_path, monkeypatch):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "report_only", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+
+    from scanner import parse_index
+    staging_dir = tmp_path / "backups" / "dryrun_main"
+    entries, _ = parse_index(staging_dir)
+    assert {e.href for e in entries} == {"orphan.md"}
+
+
+def test_cmd_dry_run_noop_when_flags_disabled(memory_root, tmp_path, monkeypatch, capsys):
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)  # both auto_fix_* default False
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+    assert "nothing would change" in capsys.readouterr().out
+
+
+def test_cmd_dry_run_skips_scoped_areas(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "project"
+    mem_dir = root / "memory"
+    mem_dir.mkdir(parents=True)
+    write_memory_file(mem_dir, "a.md", "a", "a valid description here", "user", "body")
+    area = ResolvedArea("proj", root, "scoped")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "report_only", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+    assert "dry-run only applies to 'full' mode" in capsys.readouterr().out
+
+
+def test_cmd_dry_run_repeated_runs_dont_accumulate(memory_root, tmp_path, monkeypatch):
+    write_memory_file(memory_root, "orphan.md", "orphan", "an orphan memory", "user", "body")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "report_only", "auto_fix_missing_index_entries": True,
+                    "auto_fix_broken_links": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+    main.cmd_dry_run(ns())  # second run should overwrite, not duplicate
+
+    staging_dir = tmp_path / "backups" / "dryrun_main"
+    assert sorted(p.name for p in staging_dir.glob("*.md")) == ["MEMORY.md", "orphan.md"]
+
+
 def test_cmd_audit_unknown_area_exits(memory_root, tmp_path, monkeypatch, capsys):
     area = ResolvedArea("main", memory_root, "full")
     rules = make_rules([area], tmp_path)

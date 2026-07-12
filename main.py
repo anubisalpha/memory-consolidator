@@ -7,12 +7,26 @@ from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
 from discovery import discover_external_memory_files
+from dryrun import create_dry_run_copy, diff_memory_index
 from fixer import add_missing_index_entries, remove_dead_index_links
 from registry import load_decisions, record_decision, remove_decision
 from report import print_console, write_markdown_report
 from reviewer import find_review_candidates
 from scanner import parse_index, scan_memory_files, scan_memory_files_scoped
 from templates import bootstrap_memory_folder, scaffold_memory_file
+
+
+def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict) -> list[str]:
+    """Shared by cmd_audit (applies for real) and cmd_dry_run (applies to a
+    disposable copy) so the two paths can never drift apart."""
+    auto_cfg = rules["automation"]
+    actions = []
+    if auto_cfg.get("auto_fix_broken_links", False):
+        actions += remove_dead_index_links(root, index_entries, index_lines)
+        index_entries, index_lines = parse_index(root)
+    if auto_cfg.get("auto_fix_missing_index_entries", False):
+        actions += add_missing_index_entries(root, files, index_entries)
+    return actions
 
 
 def _select_area(rules: dict, area_name: str | None) -> ResolvedArea:
@@ -74,13 +88,7 @@ def cmd_audit(args) -> None:
                       "areas (there's no single MEMORY.md index to fix here).")
                 continue
 
-            auto_cfg = rules["automation"]
-            actions = []
-            if auto_cfg.get("auto_fix_broken_links", False):
-                actions += remove_dead_index_links(area.root, index_entries, index_lines)
-                index_entries, index_lines = parse_index(area.root)
-            if auto_cfg.get("auto_fix_missing_index_entries", False):
-                actions += add_missing_index_entries(area.root, files, index_entries)
+            actions = _apply_fixes(area.root, files, index_entries, index_lines, rules)
 
             if not actions:
                 print("No auto-fixable issues found (or auto_fix_* flags are disabled in rules.md).")
@@ -96,6 +104,63 @@ def cmd_audit(args) -> None:
             new_score = compliance_score(new_findings, len(files))
             print(f"\nRe-audit after fixes — score: {score:.1f} -> {new_score:.1f}/100 "
                   f"({len(findings)} -> {len(new_findings)} findings)")
+
+
+def cmd_dry_run(args) -> None:
+    """Preview apply_safe_fixes on a disposable copy of the area — never
+    touches the real area, regardless of automation.mode."""
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+
+    if area.mode != "full":
+        print(f"Area '{area.name}' is 'scoped' — dry-run only applies to 'full' mode areas "
+              "(there's no single MEMORY.md index to fix here).")
+        return
+
+    auto_cfg = rules["automation"]
+    if not auto_cfg.get("auto_fix_missing_index_entries", False) and \
+       not auto_cfg.get("auto_fix_broken_links", False):
+        print("Both auto_fix_* flags are disabled in rules.md — nothing would change. "
+              "Enable at least one to preview its effect.")
+        return
+
+    backup_dir = Path(rules["paths"]["backup_dir"])
+    staging_dir = backup_dir / f"dryrun_{area.name}"
+    create_dry_run_copy(area.root, staging_dir)
+    print(f"Copied area '{area.name}' ({area.root}) to disposable staging copy:\n  {staging_dir}\n")
+
+    files = scan_memory_files(staging_dir, area_name=area.name)
+    index_entries, index_lines = parse_index(staging_dir)
+    actions = _apply_fixes(staging_dir, files, index_entries, index_lines, rules)
+
+    if not actions:
+        print("Dry run: no auto-fixable issues found — nothing would change.")
+        return
+
+    print(f"Dry run: {len(actions)} fix(es) WOULD be applied:")
+    for a in actions:
+        print(f"  - {a}")
+
+    diff_lines = diff_memory_index(area.root, staging_dir)
+    if diff_lines:
+        print("\nMEMORY.md diff (before -> after):\n")
+        print("".join(diff_lines))
+
+    orig_files = scan_memory_files(area.root, area_name=area.name)
+    orig_entries, orig_lines = parse_index(area.root)
+    orig_findings = run_all_checks(area.root, orig_files, orig_entries, orig_lines, rules, mode="full")
+    orig_score = compliance_score(orig_findings, len(orig_files))
+
+    new_files = scan_memory_files(staging_dir, area_name=area.name)
+    new_entries, new_lines = parse_index(staging_dir)
+    new_findings = run_all_checks(staging_dir, new_files, new_entries, new_lines, rules, mode="full")
+    new_score = compliance_score(new_findings, len(new_files))
+
+    print(f"\nScore if applied: {orig_score:.1f} -> {new_score:.1f}/100 "
+          f"({len(orig_findings)} -> {len(new_findings)} findings)")
+    print(f"\nStaging copy left at {staging_dir} for inspection — the real area is untouched.")
+    print(f"Satisfied? Set automation.mode: apply_safe_fixes in rules.md and run "
+          f"`audit --area {area.name}` to apply for real.")
 
 
 def cmd_init(args) -> None:
@@ -244,6 +309,10 @@ def main() -> None:
     p_audit = sub.add_parser("audit", help="scan configured area(s) and produce findings + report per area")
     p_audit.add_argument("--area", default=None, help="only audit this area (default: all configured areas)")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_dry = sub.add_parser("dry-run", help="preview apply_safe_fixes on a disposable copy — never touches the real area")
+    p_dry.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_dry.set_defaults(func=cmd_dry_run)
 
     p_init = sub.add_parser("init", help="bootstrap an area's root (MEMORY.md + MEMORY_RULES.md) on a fresh machine")
     p_init.add_argument("--area", default=None, help="required if multiple areas are configured")
