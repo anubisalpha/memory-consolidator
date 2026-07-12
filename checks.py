@@ -14,6 +14,13 @@ WHY_RE = re.compile(r"\*\*Why:\*\*", re.IGNORECASE)
 HOW_RE = re.compile(r"\*\*How to apply:\*\*", re.IGNORECASE)
 
 
+def _ref(path: Path) -> str:
+    """Parent-folder/filename, so files with the same basename in different
+    subfolders (common when auditing a whole area) aren't indistinguishable."""
+    parts = path.parts
+    return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+
+
 @dataclass
 class Finding:
     severity: str   # "info" | "warn" | "critical"
@@ -26,7 +33,7 @@ def check_malformed_files(files: list[MemoryFile]) -> list[Finding]:
     out = []
     for f in files:
         if f.parse_error:
-            out.append(Finding("critical", "malformed", f.parse_error, ref=str(f.path.name)))
+            out.append(Finding("critical", "malformed", f.parse_error, ref=_ref(f.path)))
     return out
 
 
@@ -42,7 +49,7 @@ def check_missing_frontmatter_fields(files: list[MemoryFile], rules: dict) -> li
         if "metadata" not in f.frontmatter or "type" not in (f.frontmatter.get("metadata") or {}):
             missing.append("metadata.type")
         if missing:
-            out.append(Finding("warn", "frontmatter", f"missing fields: {', '.join(missing)}", ref=str(f.path.name)))
+            out.append(Finding("warn", "frontmatter", f"missing fields: {', '.join(missing)}", ref=_ref(f.path)))
     return out
 
 
@@ -71,7 +78,7 @@ def check_broken_wikilinks(files: list[MemoryFile]) -> list[Finding]:
     for f in files:
         for link in f.wikilinks:
             if link not in names:
-                out.append(Finding("warn", "broken_wikilink", f"[[{link}]] does not match any memory file's name", ref=str(f.path.name)))
+                out.append(Finding("warn", "broken_wikilink", f"[[{link}]] does not match any memory file's name", ref=_ref(f.path)))
     return out
 
 
@@ -86,9 +93,9 @@ def check_slug_hygiene(files: list[MemoryFile], rules: dict) -> list[Finding]:
         if not name:
             continue
         if not KEBAB_RE.match(name):
-            out.append(Finding("warn", "slug_hygiene", f"name '{name}' is not kebab-case", ref=str(f.path.name)))
+            out.append(Finding("warn", "slug_hygiene", f"name '{name}' is not kebab-case", ref=_ref(f.path)))
         if name != f.path.stem:
-            out.append(Finding("warn", "slug_hygiene", f"name '{name}' does not match filename stem '{f.path.stem}'", ref=str(f.path.name)))
+            out.append(Finding("warn", "slug_hygiene", f"name '{name}' does not match filename stem '{f.path.stem}'", ref=_ref(f.path)))
     return out
 
 
@@ -105,7 +112,7 @@ def check_valid_type(files: list[MemoryFile], rules: dict) -> list[Finding]:
         if mem_type not in CANONICAL_TYPES:
             out.append(Finding("warn", "invalid_type",
                                 f"metadata.type '{mem_type}' is not one of {sorted(CANONICAL_TYPES)}",
-                                ref=str(f.path.name)))
+                                ref=_ref(f.path)))
     return out
 
 
@@ -126,7 +133,7 @@ def check_why_how_structure(files: list[MemoryFile], rules: dict) -> list[Findin
         if missing:
             out.append(Finding("info", "why_how_structure",
                                 f"missing {' and '.join(missing)} section(s) required for type '{f.mem_type}'",
-                                ref=str(f.path.name)))
+                                ref=_ref(f.path)))
     return out
 
 
@@ -140,9 +147,9 @@ def check_description_quality(files: list[MemoryFile], rules: dict) -> list[Find
         if not desc:
             continue  # caught by check_missing_frontmatter_fields
         if len(desc) < min_len:
-            out.append(Finding("info", "description_quality", f"description is only {len(desc)} chars — likely too generic", ref=str(f.path.name)))
+            out.append(Finding("info", "description_quality", f"description is only {len(desc)} chars — likely too generic", ref=_ref(f.path)))
         if desc.strip().lower() == f.name.strip().lower().replace("-", " "):
-            out.append(Finding("info", "description_quality", "description is just a restatement of the name", ref=str(f.path.name)))
+            out.append(Finding("info", "description_quality", "description is just a restatement of the name", ref=_ref(f.path)))
     return out
 
 
@@ -171,7 +178,7 @@ def check_code_derivable(files: list[MemoryFile], rules: dict) -> list[Finding]:
         if ratio >= threshold:
             out.append(Finding("info", "code_derivable",
                                 "body is dominated by file paths/code blocks — verify this isn't derivable from reading the repo",
-                                ref=str(f.path.name)))
+                                ref=_ref(f.path)))
     return out
 
 
@@ -181,6 +188,12 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
         return []
     out = []
     n = len(files)
+    max_pairwise = cfg.get("max_files_for_pairwise", 800)
+    if n > max_pairwise:
+        return [Finding("info", "duplicate_check_skipped",
+                         f"skipped: {n} files exceeds max_files_for_pairwise ({max_pairwise}) — "
+                         "pairwise comparison would be too slow for an area-wide scan",
+                         ref="")]
     for i in range(n):
         for j in range(i + 1, n):
             a, b = files[i], files[j]
@@ -190,9 +203,9 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
                 continue
             ratio = SequenceMatcher(None, a.body, b.body).ratio()
             if ratio >= cfg["merge_threshold"]:
-                out.append(Finding("warn", "duplicate", f"near-identical to '{b.path.name}' (ratio={ratio:.2f}) — merge candidate", ref=str(a.path.name)))
+                out.append(Finding("warn", "duplicate", f"near-identical to '{b.path.name}' (ratio={ratio:.2f}) — merge candidate", ref=_ref(a.path)))
             elif ratio >= cfg["review_threshold"]:
-                out.append(Finding("info", "duplicate", f"overlaps with '{b.path.name}' (ratio={ratio:.2f}) — review", ref=str(a.path.name)))
+                out.append(Finding("info", "duplicate", f"overlaps with '{b.path.name}' (ratio={ratio:.2f}) — review", ref=_ref(a.path)))
     return out
 
 
@@ -212,9 +225,9 @@ def check_staleness(files: list[MemoryFile], rules: dict) -> list[Finding]:
         most_recent = max(past_dates)
         age_days = (today - most_recent).days
         if age_days >= cfg["probably_dead_days"]:
-            out.append(Finding("warn", "stale", f"most recent date {most_recent} is {age_days}d old — probably stale/dead", ref=str(f.path.name)))
+            out.append(Finding("warn", "stale", f"most recent date {most_recent} is {age_days}d old — probably stale/dead", ref=_ref(f.path)))
         elif age_days >= cfg["likely_stale_days"]:
-            out.append(Finding("info", "stale", f"most recent date {most_recent} is {age_days}d old — verify still active", ref=str(f.path.name)))
+            out.append(Finding("info", "stale", f"most recent date {most_recent} is {age_days}d old — verify still active", ref=_ref(f.path)))
 
     mtime_days = cfg["mtime_fallback_days"]
     for f in files:
@@ -223,7 +236,7 @@ def check_staleness(files: list[MemoryFile], rules: dict) -> list[Finding]:
         mtime = datetime.fromtimestamp(f.path.stat().st_mtime).date()
         age = (today - mtime).days
         if age >= mtime_days:
-            out.append(Finding("info", "stale_mtime", f"not modified in {age}d (low confidence signal)", ref=str(f.path.name)))
+            out.append(Finding("info", "stale_mtime", f"not modified in {age}d (low confidence signal)", ref=_ref(f.path)))
     return out
 
 
@@ -248,7 +261,7 @@ def check_file_length(files: list[MemoryFile], rules: dict) -> list[Finding]:
         if f.parse_error:
             continue
         if f.line_count > max_lines:
-            out.append(Finding("info", "file_length", f"body is {f.line_count} lines (max {max_lines}) — consider splitting", ref=str(f.path.name)))
+            out.append(Finding("info", "file_length", f"body is {f.line_count} lines (max {max_lines}) — consider splitting", ref=_ref(f.path)))
     return out
 
 
@@ -285,7 +298,7 @@ def check_external_pointers(files: list[MemoryFile], rules: dict) -> list[Findin
             if not resolved.exists():
                 out.append(Finding("critical", "external_pointer",
                                     f"references '{candidate}' which does not exist under {workspace_root}",
-                                    ref=str(f.path.name)))
+                                    ref=_ref(f.path)))
     return out
 
 
@@ -320,12 +333,17 @@ def compliance_score(findings: list["Finding"], total_files: int) -> float:
 
 
 def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: list[IndexEntry],
-                    index_lines: list[str], rules: dict) -> list[Finding]:
+                    index_lines: list[str], rules: dict, mode: str = "full") -> list[Finding]:
+    """mode='scoped' areas have no single MEMORY.md index to speak of (they're
+    a whole project/workspace, not a dedicated memory folder), so index-shaped
+    checks (orphans, dead links, index size) don't apply there."""
     findings = []
     findings += check_malformed_files(files)
     findings += check_missing_frontmatter_fields(files, rules)
-    findings += check_orphans(memory_root, files, index_entries)
-    findings += check_dead_links(memory_root, index_entries)
+    if mode == "full":
+        findings += check_orphans(memory_root, files, index_entries)
+        findings += check_dead_links(memory_root, index_entries)
+        findings += check_index_health(memory_root, index_lines, rules)
     findings += check_broken_wikilinks(files)
     findings += check_slug_hygiene(files, rules)
     findings += check_valid_type(files, rules)
@@ -336,6 +354,5 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings += check_duplicate_slugs(files)
     findings += check_duplicates(files, rules)
     findings += check_staleness(files, rules)
-    findings += check_index_health(memory_root, index_lines, rules)
     findings += check_file_length(files, rules)
     return findings

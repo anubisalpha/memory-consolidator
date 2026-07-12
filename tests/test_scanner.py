@@ -1,4 +1,10 @@
-from scanner import parse_index, parse_memory_file, scan_memory_files
+from scanner import (
+    parse_index,
+    parse_memory_file,
+    quick_is_memory_file,
+    scan_memory_files,
+    scan_memory_files_scoped,
+)
 
 from .conftest import write_index, write_memory_file
 
@@ -71,4 +77,32 @@ def test_scan_recurses_into_subfolders(memory_root):
     files = scan_memory_files(memory_root)
     names = {f.path.name for f in files}
     assert names == {"top.md", "nested.md"}
+
+
+def test_quick_is_memory_file_true_for_real_memory(memory_root):
+    path = write_memory_file(memory_root, "a.md", "a", "desc", "user", "body")
+    assert quick_is_memory_file(path) is True
+
+
+def test_quick_is_memory_file_false_for_plain_readme(tmp_path):
+    path = tmp_path / "README.md"
+    path.write_text("# My Project\n\nJust a normal readme, no frontmatter.\n", encoding="utf-8")
+    assert quick_is_memory_file(path) is False
+
+
+def test_quick_is_memory_file_false_for_unrelated_frontmatter(tmp_path):
+    path = tmp_path / "post.md"
+    path.write_text("---\ntitle: My Blog Post\ndate: 2026-01-01\n---\nbody\n", encoding="utf-8")
+    assert quick_is_memory_file(path) is False
+
+
+def test_scan_scoped_skips_non_memory_files_silently(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    write_memory_file(memory_dir, "real.md", "real", "a real memory entry", "user", "body")
+    (memory_dir / "README.md").write_text("# just docs, no frontmatter\n", encoding="utf-8")
+
+    files = scan_memory_files_scoped(tmp_path, ["**/memory/**/*.md"])
+    names = {f.path.name for f in files}
+    assert names == {"real.md"}
 

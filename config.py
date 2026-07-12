@@ -1,7 +1,8 @@
-"""Locate and persist the memory root folder, and load rules.md."""
+"""Load rules.md and resolve each configured area's root folder."""
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -16,18 +17,19 @@ DEFAULT_GUESS_CANDIDATES = [
 ]
 
 
+@dataclass
+class ResolvedArea:
+    name: str
+    root: Path
+    mode: str  # "full" | "scoped"
+
+
 def load_rules() -> dict:
     text = RULES_PATH.read_text(encoding="utf-8")
     match = re.search(r"```yaml\n(.*?)\n```", text, re.DOTALL)
     if not match:
         raise ValueError(f"No yaml block found in {RULES_PATH}")
     return yaml.safe_load(match.group(1))
-
-
-def _resolve_relative(base: Path, rules: dict) -> dict:
-    rules["paths"]["backup_dir"] = str((base / rules["paths"]["backup_dir"]).resolve())
-    rules["paths"]["report_dir"] = str((base / rules["paths"]["report_dir"]).resolve())
-    return rules
 
 
 def load_local_config() -> dict:
@@ -47,29 +49,29 @@ def guess_memory_root() -> Path | None:
     return None
 
 
-def resolve_memory_root(rules: dict, non_interactive: bool = False) -> Path:
-    """Determine memory_root: rules.md override > saved local config > guess+confirm."""
-    if rules["paths"].get("memory_root"):
-        return Path(rules["paths"]["memory_root"]).expanduser().resolve()
-
+def _resolve_null_root(area_name: str, non_interactive: bool) -> Path:
+    """For areas with root: null — auto-detect/prompt/confirm, same as the
+    original single-memory-root behavior, keyed by area name in config.local.json
+    so multiple null-root areas don't collide."""
     local_cfg = load_local_config()
-    if "memory_root" in local_cfg:
-        path = Path(local_cfg["memory_root"])
+    cache_key = f"area_root::{area_name}"
+    if cache_key in local_cfg:
+        path = Path(local_cfg[cache_key])
         if path.exists():
             return path
-        print(f"Saved memory_root no longer exists: {path}")
+        print(f"Saved root for area '{area_name}' no longer exists: {path}")
 
     guess = guess_memory_root()
     if guess is None:
         if non_interactive:
-            raise FileNotFoundError("Could not auto-detect memory_root and none configured.")
-        entered = input("Could not auto-detect memory folder. Enter path: ").strip()
+            raise FileNotFoundError(f"Could not auto-detect root for area '{area_name}' and none configured.")
+        entered = input(f"Could not auto-detect folder for area '{area_name}'. Enter path: ").strip()
         path = Path(entered).expanduser().resolve()
     else:
         if non_interactive:
             path = guess
         else:
-            answer = input(f"Use memory folder: {guess} ? [Y/n/path]: ").strip()
+            answer = input(f"Area '{area_name}': use folder {guess} ? [Y/n/path]: ").strip()
             if answer == "" or answer.lower() == "y":
                 path = guess
             elif answer.lower() == "n":
@@ -79,32 +81,58 @@ def resolve_memory_root(rules: dict, non_interactive: bool = False) -> Path:
                 path = Path(answer).expanduser().resolve()
 
     if not path.exists():
-        raise FileNotFoundError(f"Memory folder does not exist: {path}")
+        raise FileNotFoundError(f"Area '{area_name}' folder does not exist: {path}")
 
-    local_cfg["memory_root"] = str(path)
+    local_cfg[cache_key] = str(path)
     save_local_config(local_cfg)
     return path
 
 
+def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedArea]:
+    areas_cfg = rules.get("areas") or []
+    resolved = []
+    for entry in areas_cfg:
+        name = entry["name"]
+        mode = entry.get("mode", "full")
+        if mode not in ("full", "scoped"):
+            raise ValueError(f"area '{name}': invalid mode '{mode}' (must be 'full' or 'scoped')")
+
+        root_cfg = entry.get("root")
+        if root_cfg:
+            root = Path(root_cfg).expanduser().resolve()
+            if not root.exists():
+                raise FileNotFoundError(f"area '{name}': root does not exist: {root}")
+        else:
+            root = _resolve_null_root(name, non_interactive)
+
+        resolved.append(ResolvedArea(name=name, root=root, mode=mode))
+    return resolved
+
+
 def get_config(non_interactive: bool = False) -> dict:
     rules = load_rules()
-    memory_root = resolve_memory_root(rules, non_interactive=non_interactive)
-    rules = _resolve_relative(PROJECT_DIR, rules)
+    areas = resolve_areas(rules, non_interactive=non_interactive)
 
+    rules["paths"]["backup_dir"] = str((PROJECT_DIR / rules["paths"]["backup_dir"]).resolve())
+    rules["paths"]["report_dir"] = str((PROJECT_DIR / rules["paths"]["report_dir"]).resolve())
     backup_dir = Path(rules["paths"]["backup_dir"])
     report_dir = Path(rules["paths"]["report_dir"])
 
-    try:
-        memory_root.relative_to(backup_dir)
-        raise ValueError("backup_dir cannot be inside memory_root")
-    except ValueError:
-        pass
-    if str(backup_dir).startswith(str(memory_root)):
-        print("ERROR: backup_dir resolves inside memory_root — refusing to continue.", file=sys.stderr)
-        sys.exit(1)
+    for area in areas:
+        backup_inside_root = str(backup_dir).startswith(str(area.root) + str(Path("/"))) \
+            or str(backup_dir) == str(area.root)
+        if backup_inside_root:
+            if rules["automation"]["mode"] != "report_only":
+                print(f"ERROR: backup_dir resolves inside area '{area.name}' root and "
+                      "automation.mode writes to it — refusing to continue (a snapshot "
+                      "could try to back up itself mid-write).", file=sys.stderr)
+                sys.exit(1)
+            print(f"WARNING: backup_dir ({backup_dir}) is inside area '{area.name}' root "
+                  f"({area.root}). Harmless in report_only mode, but snapshot/rollback "
+                  "would be unsafe here.", file=sys.stderr)
 
     backup_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    rules["memory_root"] = str(memory_root)
+    rules["_resolved_areas"] = areas
     return rules

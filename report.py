@@ -35,9 +35,10 @@ def print_console(findings: list[Finding], memory_root: Path, score: float | Non
 
 
 def write_markdown_report(findings: list[Finding], memory_root: Path, report_dir: Path,
-                           keep_last_n: int, score: float | None = None) -> Path:
+                           keep_last_n: int, score: float | None = None,
+                           report_name_prefix: str = "audit") -> Path:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    report_path = report_dir / f"audit_{timestamp}.md"
+    report_path = report_dir / f"{report_name_prefix}_{timestamp}.md"
 
     lines = [
         f"# Memory Audit Report — {timestamp}",
@@ -65,12 +66,12 @@ def write_markdown_report(findings: list[Finding], memory_root: Path, report_dir
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
-    _prune_old_reports(report_dir, keep_last_n)
+    _prune_old_reports(report_dir, keep_last_n, report_name_prefix)
     return report_path
 
 
-def _prune_old_reports(report_dir: Path, keep_last_n: int) -> None:
-    reports = sorted(report_dir.glob("audit_*.md"), key=lambda p: p.name)
+def _prune_old_reports(report_dir: Path, keep_last_n: int, report_name_prefix: str) -> None:
+    reports = sorted(report_dir.glob(f"{report_name_prefix}_*.md"), key=lambda p: p.name)
     excess = len(reports) - keep_last_n
     for old in reports[:max(excess, 0)]:
         old.unlink()

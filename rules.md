@@ -6,15 +6,42 @@ any AI context window; it is only read by `main.py`.
 
 ```yaml
 paths:
-  memory_root: null          # null = prompt/auto-detect on first run, then saved to config.json
-  backup_dir: "./backups"    # relative to this rules.md — must never be inside memory_root
+  backup_dir: "./backups"    # relative to this rules.md — must never be inside any area's root
   report_dir: "./reports"    # relative to this rules.md
+
+areas:
+  # Each area is one root the tool audits independently (its own report, its
+  # own findings). Two modes:
+  #   full — this root IS a dedicated memory folder; every *.md under it
+  #          (recursively) is treated as a memory file candidate.
+  #   scoped — this root is a broader area (a whole project or workspace);
+  #            only files matching memory_file_patterns are treated as
+  #            memory candidates, everything else (READMEs, docs, session
+  #            files, etc.) is ignored rather than misclassified.
+  - name: claude-auto-memory
+    root: null              # null = auto-detect on first run, then saved to config.local.json
+    mode: full
+  - name: claudecore-project
+    root: "C:/Users/marca/claudecore"
+    mode: scoped
+  - name: dot-claude
+    root: "C:/Users/marca/.claude"
+    mode: scoped
+
+memory_file_patterns:
+  # Used by `mode: scoped` areas and by `map`, to decide what counts as a
+  # memory file candidate outside a dedicated memory folder.
+  - "**/MEMORY.md"
+  - "**/CLAUDE_MEMORY.md"
+  - "**/*_memory.md"
+  - "**/memory/**/*.md"
 
 duplicate_detection:
   enabled: true
   merge_threshold: 0.90      # SequenceMatcher ratio >= this => "merge candidate"
   review_threshold: 0.70     # ratio >= this (and < merge_threshold) => "review candidate"
   compare_across_types: false   # if false, only compare files with the same metadata.type
+  max_files_for_pairwise: 800   # above this file count, skip pairwise comparison (O(n^2), too slow for area-wide scans)
 
 staleness:
   enabled: true
@@ -46,18 +73,11 @@ code_derivable_check:
   code_line_ratio_threshold: 0.5   # fraction of body that looks like paths/code before flagging
 
 external_scan:
-  # memory_root is scanned recursively now (subfolders included). This section
-  # is for content that lives OUTSIDE memory_root entirely: "pointer only"
-  # memories whose description/body says "full details in `some/path.md`",
-  # and the broader workspace-wide `map` command that finds scattered
-  # memory-shaped files (MEMORY.md, CLAUDE_MEMORY.md, *_memory.md).
+  # For "pointer only" memories whose description/body says
+  # "full details in `some/path.md`" — that target usually lives in a
+  # different area's root, so the normal dead-link check can't see it.
   enabled: true
-  workspace_root: "C:/Users/marca/claudecore"   # root searched for pointer targets and `map`
-  map_patterns:
-    - "**/MEMORY.md"
-    - "**/CLAUDE_MEMORY.md"
-    - "**/*_memory.md"
-    - "**/memory/**/*.md"
+  workspace_root: "C:/Users/marca/claudecore"   # root searched for pointer targets
 
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto
