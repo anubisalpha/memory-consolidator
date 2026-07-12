@@ -4,10 +4,11 @@ import sys
 from pathlib import Path
 
 from backup import create_snapshot, list_snapshots, rollback
-from checks import run_all_checks
+from checks import compliance_score, run_all_checks
 from config import get_config
 from report import print_console, write_markdown_report
 from scanner import parse_index, scan_memory_files
+from templates import bootstrap_memory_folder, scaffold_memory_file
 
 
 def cmd_audit(args) -> None:
@@ -17,12 +18,13 @@ def cmd_audit(args) -> None:
     files = scan_memory_files(memory_root)
     index_entries, index_lines = parse_index(memory_root)
     findings = run_all_checks(memory_root, files, index_entries, index_lines, rules)
+    score = compliance_score(findings, len(files))
 
-    print_console(findings, memory_root)
+    print_console(findings, memory_root, score=score)
 
     report_dir = Path(rules["paths"]["report_dir"])
     report_path = write_markdown_report(
-        findings, memory_root, report_dir, rules["reporting"]["keep_last_n_reports"]
+        findings, memory_root, report_dir, rules["reporting"]["keep_last_n_reports"], score=score
     )
     print(f"\nReport written to: {report_path}")
 
@@ -31,6 +33,26 @@ def cmd_audit(args) -> None:
         snap = create_snapshot(memory_root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']})")
         print(f"Snapshot created before any apply step: {snap}")
         print("apply_safe_fixes / full_auto logic not yet implemented — audit-only for now.")
+
+
+def cmd_init(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    memory_root = Path(rules["memory_root"])
+    actions = bootstrap_memory_folder(memory_root)
+    if actions:
+        print("Bootstrap actions taken:")
+        for a in actions:
+            print(f"  - {a}")
+    else:
+        print(f"Memory folder already fully set up at {memory_root}")
+
+
+def cmd_new_memory(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    memory_root = Path(rules["memory_root"])
+    path = scaffold_memory_file(memory_root, args.type, args.slug, args.description)
+    print(f"Created: {path}")
+    print("Remember to add a one-line entry to MEMORY.md's index.")
 
 
 def cmd_snapshot(args) -> None:
@@ -63,6 +85,15 @@ def main() -> None:
 
     p_audit = sub.add_parser("audit", help="scan memory_root and produce findings + report")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_init = sub.add_parser("init", help="bootstrap memory_root (MEMORY.md + MEMORY_RULES.md) on a fresh machine")
+    p_init.set_defaults(func=cmd_init)
+
+    p_new = sub.add_parser("new-memory", help="scaffold a correctly-structured memory file")
+    p_new.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
+    p_new.add_argument("--slug", required=True, help="kebab-case name, becomes the filename")
+    p_new.add_argument("--description", required=True, help="one-line description")
+    p_new.set_defaults(func=cmd_new_memory)
 
     p_snap = sub.add_parser("snapshot", help="manually snapshot memory_root")
     p_snap.add_argument("--reason", default=None)

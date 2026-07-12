@@ -56,10 +56,13 @@ def parse_memory_file(path: Path) -> MemoryFile:
     return MemoryFile(path=path, frontmatter=frontmatter, body=body.strip(), raw=raw)
 
 
+NON_MEMORY_FILES = {"MEMORY.md", "MEMORY_RULES.md"}
+
+
 def scan_memory_files(memory_root: Path) -> list[MemoryFile]:
     files = []
     for p in sorted(memory_root.glob("*.md")):
-        if p.name == "MEMORY.md":
+        if p.name in NON_MEMORY_FILES:
             continue
         files.append(parse_memory_file(p))
     return files

@@ -8,6 +8,10 @@ from pathlib import Path
 from scanner import IndexEntry, MemoryFile
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
+KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+CANONICAL_TYPES = {"user", "feedback", "project", "reference"}
+WHY_RE = re.compile(r"\*\*Why:\*\*", re.IGNORECASE)
+HOW_RE = re.compile(r"\*\*How to apply:\*\*", re.IGNORECASE)
 
 
 @dataclass
@@ -67,6 +71,106 @@ def check_broken_wikilinks(files: list[MemoryFile]) -> list[Finding]:
         for link in f.wikilinks:
             if link not in names:
                 out.append(Finding("warn", "broken_wikilink", f"[[{link}]] does not match any memory file's name", ref=str(f.path.name)))
+    return out
+
+
+def check_slug_hygiene(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    if not rules.get("spec_conformance", {}).get("require_kebab_case_slug", True):
+        return []
+    out = []
+    for f in files:
+        if f.parse_error:
+            continue
+        name = f.frontmatter.get("name")
+        if not name:
+            continue
+        if not KEBAB_RE.match(name):
+            out.append(Finding("warn", "slug_hygiene", f"name '{name}' is not kebab-case", ref=str(f.path.name)))
+        if name != f.path.stem:
+            out.append(Finding("warn", "slug_hygiene", f"name '{name}' does not match filename stem '{f.path.stem}'", ref=str(f.path.name)))
+    return out
+
+
+def check_valid_type(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    if not rules.get("spec_conformance", {}).get("require_valid_type", True):
+        return []
+    out = []
+    for f in files:
+        if f.parse_error:
+            continue
+        mem_type = f.mem_type
+        if mem_type is None:
+            continue  # already caught by check_missing_frontmatter_fields
+        if mem_type not in CANONICAL_TYPES:
+            out.append(Finding("warn", "invalid_type",
+                                f"metadata.type '{mem_type}' is not one of {sorted(CANONICAL_TYPES)}",
+                                ref=str(f.path.name)))
+    return out
+
+
+def check_why_how_structure(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    """feedback/project memories are spec'd to lead with the rule/fact, then
+    explicit **Why:** and **How to apply:** lines."""
+    if not rules.get("spec_conformance", {}).get("require_why_how_for_feedback_and_project", True):
+        return []
+    out = []
+    for f in files:
+        if f.parse_error or f.mem_type not in ("feedback", "project"):
+            continue
+        missing = []
+        if not WHY_RE.search(f.body):
+            missing.append("**Why:**")
+        if not HOW_RE.search(f.body):
+            missing.append("**How to apply:**")
+        if missing:
+            out.append(Finding("info", "why_how_structure",
+                                f"missing {' and '.join(missing)} section(s) required for type '{f.mem_type}'",
+                                ref=str(f.path.name)))
+    return out
+
+
+def check_description_quality(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    min_len = rules.get("description_quality", {}).get("min_length", 15)
+    out = []
+    for f in files:
+        if f.parse_error:
+            continue
+        desc = f.frontmatter.get("description", "")
+        if not desc:
+            continue  # caught by check_missing_frontmatter_fields
+        if len(desc) < min_len:
+            out.append(Finding("info", "description_quality", f"description is only {len(desc)} chars — likely too generic", ref=str(f.path.name)))
+        if desc.strip().lower() == f.name.strip().lower().replace("-", " "):
+            out.append(Finding("info", "description_quality", "description is just a restatement of the name", ref=str(f.path.name)))
+    return out
+
+
+def check_code_derivable(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    """Heuristic, low-confidence: flag project/user memories that look like they
+    mostly restate things derivable from the codebase (paths, code blocks) rather
+    than genuinely non-derivable context — per the 'don't save what git/code
+    already shows' exclusion rule."""
+    cfg = rules.get("code_derivable_check", {})
+    if not cfg.get("enabled", False):
+        return []
+    threshold = cfg.get("code_line_ratio_threshold", 0.5)
+    out = []
+    code_block_re = re.compile(r"```.*?```", re.DOTALL)
+    path_line_re = re.compile(r"^[\w./\\-]+\.\w{1,5}$")
+    for f in files:
+        if f.parse_error or f.mem_type not in ("project", "user"):
+            continue
+        body_no_code = code_block_re.sub("", f.body)
+        lines = [l for l in body_no_code.splitlines() if l.strip()]
+        if not lines:
+            continue
+        path_like = sum(1 for l in lines if path_line_re.match(l.strip()))
+        code_chars = len(f.body) - len(body_no_code)
+        ratio = (path_like / len(lines)) + (code_chars / max(len(f.body), 1))
+        if ratio >= threshold:
+            out.append(Finding("info", "code_derivable",
+                                "body is dominated by file paths/code blocks — verify this isn't derivable from reading the repo",
+                                ref=str(f.path.name)))
     return out
 
 
@@ -147,6 +251,36 @@ def check_file_length(files: list[MemoryFile], rules: dict) -> list[Finding]:
     return out
 
 
+def check_duplicate_slugs(files: list[MemoryFile]) -> list[Finding]:
+    """Cross-machine drift detector: same name slug, different content — the
+    kind of conflict that shows up when memory/ is synced between computers."""
+    out = []
+    by_name: dict[str, list[MemoryFile]] = {}
+    for f in files:
+        if f.parse_error:
+            continue
+        by_name.setdefault(f.name, []).append(f)
+    for name, group in by_name.items():
+        if len(group) < 2:
+            continue
+        bodies = {g.body for g in group}
+        if len(bodies) > 1:
+            paths = ", ".join(g.path.name for g in group)
+            out.append(Finding("critical", "duplicate_slug",
+                                f"name '{name}' used by multiple files with differing content: {paths}",
+                                ref=name))
+    return out
+
+
+def compliance_score(findings: list["Finding"], total_files: int) -> float:
+    """Rough 0-100 conformance score: penalize by severity, floor at 0."""
+    if total_files == 0:
+        return 100.0
+    weight = {"critical": 10, "warn": 4, "info": 1}
+    penalty = sum(weight.get(f.severity, 1) for f in findings)
+    return max(0.0, 100.0 - (penalty / total_files) * 5)
+
+
 def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: list[IndexEntry],
                     index_lines: list[str], rules: dict) -> list[Finding]:
     findings = []
@@ -155,6 +289,12 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings += check_orphans(files, index_entries)
     findings += check_dead_links(memory_root, index_entries)
     findings += check_broken_wikilinks(files)
+    findings += check_slug_hygiene(files, rules)
+    findings += check_valid_type(files, rules)
+    findings += check_why_how_structure(files, rules)
+    findings += check_description_quality(files, rules)
+    findings += check_code_derivable(files, rules)
+    findings += check_duplicate_slugs(files)
     findings += check_duplicates(files, rules)
     findings += check_staleness(files, rules)
     findings += check_index_health(memory_root, index_lines, rules)

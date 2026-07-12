@@ -31,6 +31,20 @@ file_health:
   max_body_lines: 150        # memory files longer than this may need splitting
   require_frontmatter: true  # flag files missing name/description/metadata.type
 
+spec_conformance:
+  # Enforces the actual memory-authoring spec (four types, Why/How structure,
+  # kebab-case slugs) rather than just index/link hygiene.
+  require_why_how_for_feedback_and_project: true   # see check_why_how_structure
+  require_valid_type: true                         # metadata.type must be user|feedback|project|reference
+  require_kebab_case_slug: true                     # name: must be kebab-case and match filename
+
+description_quality:
+  min_length: 15              # descriptions shorter than this are flagged as too generic
+
+code_derivable_check:
+  enabled: false               # off by default: heuristic-only, prone to false positives
+  code_line_ratio_threshold: 0.5   # fraction of body that looks like paths/code before flagging
+
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto
   auto_fix_missing_index_entries: false   # only used in apply_safe_fixes / full_auto
