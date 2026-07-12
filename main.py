@@ -6,6 +6,7 @@ from pathlib import Path
 from backup import create_snapshot, list_snapshots, rollback
 from checks import compliance_score, run_all_checks
 from config import get_config
+from discovery import discover_external_memory_files
 from report import print_console, write_markdown_report
 from scanner import parse_index, scan_memory_files
 from templates import bootstrap_memory_folder, scaffold_memory_file
@@ -55,6 +56,30 @@ def cmd_new_memory(args) -> None:
     print("Remember to add a one-line entry to MEMORY.md's index.")
 
 
+def cmd_map(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    memory_root = Path(rules["memory_root"])
+    cfg = rules.get("external_scan", {})
+    if not cfg.get("enabled", False) or not cfg.get("workspace_root"):
+        print("external_scan is disabled or workspace_root is unset in rules.md — nothing to map.")
+        return
+    workspace_root = Path(cfg["workspace_root"])
+    if not workspace_root.exists():
+        print(f"workspace_root does not exist: {workspace_root}")
+        return
+
+    found = discover_external_memory_files(workspace_root, memory_root, cfg.get("map_patterns"))
+    if not found:
+        print(f"No memory-shaped files found outside {memory_root} under {workspace_root}.")
+        return
+
+    print(f"Found {len(found)} memory-shaped file(s) outside memory_root:\n")
+    for d in found:
+        print(f"  {d.path}  (matched: {d.matched_pattern})")
+    print("\nThese are not audited by `audit` unless referenced via a pointer path")
+    print("(e.g. a description containing `some/path.md` in backticks).")
+
+
 def cmd_snapshot(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     memory_root = Path(rules["memory_root"])
@@ -94,6 +119,9 @@ def main() -> None:
     p_new.add_argument("--slug", required=True, help="kebab-case name, becomes the filename")
     p_new.add_argument("--description", required=True, help="one-line description")
     p_new.set_defaults(func=cmd_new_memory)
+
+    p_map = sub.add_parser("map", help="discover memory-shaped files scattered outside memory_root")
+    p_map.set_defaults(func=cmd_map)
 
     p_snap = sub.add_parser("snapshot", help="manually snapshot memory_root")
     p_snap.add_argument("--reason", default=None)

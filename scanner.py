@@ -60,8 +60,9 @@ NON_MEMORY_FILES = {"MEMORY.md", "MEMORY_RULES.md"}
 
 
 def scan_memory_files(memory_root: Path) -> list[MemoryFile]:
+    """Recursive: picks up *.md nested in subfolders of memory_root, not just the top level."""
     files = []
-    for p in sorted(memory_root.glob("*.md")):
+    for p in sorted(memory_root.rglob("*.md")):
         if p.name in NON_MEMORY_FILES:
             continue
         files.append(parse_memory_file(p))

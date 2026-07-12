@@ -45,6 +45,20 @@ code_derivable_check:
   enabled: false               # off by default: heuristic-only, prone to false positives
   code_line_ratio_threshold: 0.5   # fraction of body that looks like paths/code before flagging
 
+external_scan:
+  # memory_root is scanned recursively now (subfolders included). This section
+  # is for content that lives OUTSIDE memory_root entirely: "pointer only"
+  # memories whose description/body says "full details in `some/path.md`",
+  # and the broader workspace-wide `map` command that finds scattered
+  # memory-shaped files (MEMORY.md, CLAUDE_MEMORY.md, *_memory.md).
+  enabled: true
+  workspace_root: "C:/Users/marca/claudecore"   # root searched for pointer targets and `map`
+  map_patterns:
+    - "**/MEMORY.md"
+    - "**/CLAUDE_MEMORY.md"
+    - "**/*_memory.md"
+    - "**/memory/**/*.md"
+
 automation:
   mode: "report_only"        # report_only | apply_safe_fixes | full_auto
   auto_fix_missing_index_entries: false   # only used in apply_safe_fixes / full_auto

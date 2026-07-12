@@ -38,9 +38,49 @@ def test_check_orphans(memory_root):
     write_index(memory_root, ["- [Indexed](indexed.md) — hook"])
     files = scan_memory_files(memory_root)
     entries, _ = parse_index(memory_root)
-    findings = checks.check_orphans(files, entries)
+    findings = checks.check_orphans(memory_root, files, entries)
     assert len(findings) == 1
     assert findings[0].ref == "orphan.md"
+
+
+def test_check_orphans_nested_file_matches_relative_href(memory_root):
+    sub = memory_root / "archive"
+    sub.mkdir()
+    write_memory_file(sub, "nested.md", "nested", "desc", "user", "body")
+    write_index(memory_root, ["- [Nested](archive/nested.md) — hook"])
+    files = scan_memory_files(memory_root)
+    entries, _ = parse_index(memory_root)
+    findings = checks.check_orphans(memory_root, files, entries)
+    assert findings == []
+
+
+def test_check_external_pointers_missing_target(memory_root, rules, tmp_path):
+    rules["external_scan"] = {"enabled": True, "workspace_root": str(tmp_path)}
+    write_memory_file(memory_root, "a.md", "a", "Pointer only; full details in `projects/X/CLAUDE_MEMORY.md`",
+                       "project", "body")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_external_pointers(files, rules)
+    assert len(findings) == 1
+    assert findings[0].severity == "critical"
+
+
+def test_check_external_pointers_existing_target(memory_root, rules, tmp_path):
+    target_dir = tmp_path / "projects" / "X"
+    target_dir.mkdir(parents=True)
+    (target_dir / "CLAUDE_MEMORY.md").write_text("real content", encoding="utf-8")
+    rules["external_scan"] = {"enabled": True, "workspace_root": str(tmp_path)}
+    write_memory_file(memory_root, "a.md", "a", "Pointer only; full details in `projects/X/CLAUDE_MEMORY.md`",
+                       "project", "body")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_external_pointers(files, rules)
+    assert findings == []
+
+
+def test_check_external_pointers_disabled(memory_root, rules):
+    rules["external_scan"] = {"enabled": False}
+    write_memory_file(memory_root, "a.md", "a", "full details in `nowhere/missing.md`", "project", "body")
+    files = scan_memory_files(memory_root)
+    assert checks.check_external_pointers(files, rules) == []
 
 
 def test_check_dead_links(memory_root):

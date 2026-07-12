@@ -60,3 +60,15 @@ def test_parse_index_missing_file(memory_root):
     entries, lines = parse_index(memory_root)
     assert entries == []
     assert lines == []
+
+
+def test_scan_recurses_into_subfolders(memory_root):
+    write_memory_file(memory_root, "top.md", "top", "top level memory", "user", "body")
+    sub = memory_root / "archive"
+    sub.mkdir()
+    write_memory_file(sub, "nested.md", "nested", "nested memory", "user", "body")
+
+    files = scan_memory_files(memory_root)
+    names = {f.path.name for f in files}
+    assert names == {"top.md", "nested.md"}
+

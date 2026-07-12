@@ -46,12 +46,13 @@ def check_missing_frontmatter_fields(files: list[MemoryFile], rules: dict) -> li
     return out
 
 
-def check_orphans(files: list[MemoryFile], index_entries: list[IndexEntry]) -> list[Finding]:
+def check_orphans(memory_root: Path, files: list[MemoryFile], index_entries: list[IndexEntry]) -> list[Finding]:
     indexed_hrefs = {e.href for e in index_entries}
     out = []
     for f in files:
-        if f.path.name not in indexed_hrefs:
-            out.append(Finding("warn", "orphan", "file exists but has no MEMORY.md index entry", ref=str(f.path.name)))
+        rel = f.path.relative_to(memory_root).as_posix()
+        if rel not in indexed_hrefs and f.path.name not in indexed_hrefs:
+            out.append(Finding("warn", "orphan", "file exists but has no MEMORY.md index entry", ref=rel))
     return out
 
 
@@ -251,6 +252,43 @@ def check_file_length(files: list[MemoryFile], rules: dict) -> list[Finding]:
     return out
 
 
+POINTER_CONTEXT_RE = re.compile(
+    r"(?:pointer only|full details? (?:is |are )?in|see `)[^`\n]*`([^`]+\.(?:md|txt|json|yaml|yml))`",
+    re.IGNORECASE,
+)
+
+
+def check_external_pointers(files: list[MemoryFile], rules: dict) -> list[Finding]:
+    """Some memories are deliberately 'pointer only' — e.g. description says
+    'full details in `projects/X/CLAUDE_MEMORY.md`'. That target lives outside
+    memory_root, so the normal dead-link check can't see it. This resolves
+    any backtick-quoted path in frontmatter/body against workspace_root and
+    flags ones that don't exist."""
+    cfg = rules.get("external_scan", {})
+    if not cfg.get("enabled", False):
+        return []
+    workspace_root = cfg.get("workspace_root")
+    if not workspace_root:
+        return []
+    workspace_root = Path(workspace_root)
+    if not workspace_root.exists():
+        return [Finding("warn", "external_pointer",
+                         f"configured workspace_root does not exist: {workspace_root}", ref="rules.md")]
+
+    out = []
+    for f in files:
+        if f.parse_error:
+            continue
+        text = f"{f.frontmatter.get('description', '')}\n{f.body}"
+        for candidate in POINTER_CONTEXT_RE.findall(text):
+            resolved = (workspace_root / candidate)
+            if not resolved.exists():
+                out.append(Finding("critical", "external_pointer",
+                                    f"references '{candidate}' which does not exist under {workspace_root}",
+                                    ref=str(f.path.name)))
+    return out
+
+
 def check_duplicate_slugs(files: list[MemoryFile]) -> list[Finding]:
     """Cross-machine drift detector: same name slug, different content — the
     kind of conflict that shows up when memory/ is synced between computers."""
@@ -286,7 +324,7 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings = []
     findings += check_malformed_files(files)
     findings += check_missing_frontmatter_fields(files, rules)
-    findings += check_orphans(files, index_entries)
+    findings += check_orphans(memory_root, files, index_entries)
     findings += check_dead_links(memory_root, index_entries)
     findings += check_broken_wikilinks(files)
     findings += check_slug_hygiene(files, rules)
@@ -294,6 +332,7 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings += check_why_how_structure(files, rules)
     findings += check_description_quality(files, rules)
     findings += check_code_derivable(files, rules)
+    findings += check_external_pointers(files, rules)
     findings += check_duplicate_slugs(files)
     findings += check_duplicates(files, rules)
     findings += check_staleness(files, rules)
