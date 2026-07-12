@@ -166,6 +166,36 @@ python main.py review-list --area <name>     # show recorded decisions
 python main.py review-forget --area <name> <rel/path.md>   # undo a decision
 ```
 
+### Content review: near-duplicates and stale files
+
+`review` is about a file's *shape* (is this valid frontmatter?). It doesn't
+cover content judgment calls: "are these two files actually the same
+memory?" or "is this file genuinely dead, or just old?" Without a way to
+record an answer, those findings resurface unchanged in every single audit
+report. `python main.py review-findings` covers that gap — it walks:
+
+- **Near-duplicate pairs** — the `review_threshold`–`merge_threshold` band
+  `check_duplicates` reports, plus exact (byte-identical) pairs, since
+  outside `full_auto` mode nothing auto-merges those either.
+- **Stale-but-not-auto-marked files** — the same date-based signal as
+  `auto_fix_mark_stale`, for files that don't already carry the marker
+  (nothing to review on an already-marked file).
+
+For each, you can **`[d]ismiss`** (confirmed not an issue — suppressed from
+all future audits for that specific pair/file) or **`[s]kip`** (leave
+undecided, ask again next time). Decisions live in a separate store,
+[`finding_review_decisions.json`](finding_review_decisions.json) — kept
+apart from `review_decisions.json` because the vocabulary is different (a
+duplicate decision's key is a *pair* of files, not one) — and are likewise
+committed to git.
+
+```bash
+python main.py review-findings --area <name>                       # interactive
+python main.py review-findings-list --area <name>                  # show recorded decisions
+python main.py review-findings-forget --area <name> duplicate a.md::b.md   # undo a decision
+python main.py review-findings-forget --area <name> stale a.md            # undo a decision
+```
+
 ## Usage
 
 ```bash
@@ -176,6 +206,7 @@ python main.py audit --area claudecore-project   # audit just one area
 python main.py snapshot --area <name>            # manually back up an area's root
 python main.py list-snapshots                    # list recorded snapshots (all areas)
 python main.py rollback --area <name> --which latest   # restore an area from a snapshot
+python main.py restore-file --area <name> <rel/path.md>   # undo a single unwanted file rewrite, nothing else touched
 python main.py init --area <name>                # bootstrap MEMORY.md + reference card on a fresh machine
 python main.py new-memory --area <name> --type feedback --slug my-slug --description "..."
 python main.py map --area <name>                 # find memory-shaped files scattered outside an area's root
@@ -276,8 +307,8 @@ first automated write — see the real example in this repo's own
 
 ### Preview first with `dry-run`
 
-Before flipping `automation.mode` to `apply_safe_fixes` for real, preview
-the exact impact:
+Before flipping `automation.mode` to `apply_safe_fixes` or `full_auto` for
+real, preview the exact impact:
 
 ```bash
 python main.py dry-run --area <name>
@@ -285,17 +316,22 @@ python main.py dry-run --area <name>
 
 This copies the area's root to a disposable staging folder under
 `backups/dryrun_<area>/` (see [`dryrun.py`](dryrun.py)), applies whichever
-`auto_fix_*` flags are enabled to *that copy only*, and shows:
+`auto_fix_*` flags are enabled *for the configured `automation.mode`* to
+that copy only, and shows:
 
 - the list of fixes that would apply
 - a unified diff of `MEMORY.md` (before vs. after)
+- under `full_auto`: a unified diff of every individual file `auto_fix_mark_stale`/
+  `auto_fix_merge_exact_duplicates` would rewrite — the two fixes that touch
+  file bodies rather than just `MEMORY.md`
 - the compliance score before vs. after, projected
 
 The real area is never touched — `dry-run` works regardless of
 `automation.mode`. The staging copy is left in place afterward so you can
 inspect it directly (a second `dry-run` for the same area overwrites it
-rather than accumulating copies). Once you're satisfied, set
-`automation.mode: apply_safe_fixes` and run `audit --area <name>` for real.
+rather than accumulating copies). Once you're satisfied, confirm
+`automation.mode` in `rules.md` is set the way you want and run
+`audit --area <name>` for real.
 
 ## Safety
 
@@ -310,6 +346,11 @@ rather than accumulating copies). Once you're satisfied, set
   misconfiguration never blocks a `--area`-targeted run.
 - In `report_only` mode this same condition is only a warning, since nothing
   is written.
+- If a `full_auto` fix does something you disagree with, `rollback` restores
+  the *entire* area from a snapshot (discarding anything else changed
+  since). For undoing just one file's rewrite, `restore-file` is more
+  targeted — it restores a single file's content from a snapshot without
+  touching anything else in the area.
 
 ## Project layout
 

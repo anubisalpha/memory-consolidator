@@ -349,3 +349,106 @@ def test_run_all_checks_smoke(memory_root, rules):
     entries, lines = parse_index(memory_root)
     findings = checks.run_all_checks(memory_root, files, entries, lines, rules)
     assert findings == []
+
+
+# ---- dismissed duplicates/staleness (review-findings suppression) ----
+
+def test_check_duplicates_suppresses_dismissed_pair(memory_root, rules):
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "user", body)
+    files = scan_memory_files(memory_root)
+    dismissed = {"a.md::b.md"}
+    findings = checks.check_duplicates(files, rules, memory_root, dismissed)
+    assert findings == []
+
+
+def test_check_duplicates_dismissal_is_order_independent(memory_root, rules):
+    # the dismissal key is a sorted pair, so it must match regardless of
+    # which file happened to be discovered first during the scan
+    body = "identical content " * 30
+    write_memory_file(memory_root, "z.md", "z", "desc z long enough", "user", body)
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    files = scan_memory_files(memory_root)  # scan order may be a.md, z.md
+    dismissed = {"a.md::z.md"}
+    findings = checks.check_duplicates(files, rules, memory_root, dismissed)
+    assert findings == []
+
+
+def test_check_duplicates_unrelated_dismissal_does_not_suppress(memory_root, rules):
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "user", body)
+    files = scan_memory_files(memory_root)
+    findings = checks.check_duplicates(files, rules, memory_root, {"x.md::y.md"})
+    assert any("merge candidate" in f.message for f in findings)
+
+
+def test_check_staleness_suppresses_dismissed_file(memory_root, rules):
+    old_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",
+                       f"decision made on {old_date}")
+    files = scan_memory_files(memory_root)
+    findings = checks.check_staleness(files, rules, memory_root, {"a.md"})
+    assert not any(f.category == "stale" for f in findings)
+
+
+# ---- find_duplicate_review_candidates ----
+
+def test_find_duplicate_review_candidates_includes_near_and_exact(memory_root, rules):
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "user", body)
+    near_body = body.rstrip() + " with a slightly different tail appended here for near match"
+    write_memory_file(memory_root, "c.md", "c", "desc c long enough", "user", near_body)
+    files = scan_memory_files(memory_root)
+    pairs = checks.find_duplicate_review_candidates(files, rules)
+    ratios = sorted(r for _, _, r in pairs)
+    assert any(r == 1.0 for r in ratios)  # exact a/b pair included
+    assert len(pairs) >= 2  # a/b exact, plus at least one near-dup pair with c
+
+
+def test_find_duplicate_review_candidates_respects_type_boundary(memory_root, rules):
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "project", body)
+    files = scan_memory_files(memory_root)
+    assert checks.find_duplicate_review_candidates(files, rules) == []
+
+
+def test_find_duplicate_review_candidates_disabled(memory_root, rules):
+    rules["duplicate_detection"]["enabled"] = False
+    body = "identical content " * 30
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b long enough", "user", body)
+    files = scan_memory_files(memory_root)
+    assert checks.find_duplicate_review_candidates(files, rules) == []
+
+
+# ---- find_stale_review_candidates ----
+
+def test_find_stale_review_candidates_flags_old_dated_project_memory(memory_root, rules):
+    old_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",
+                       f"decision made on {old_date}")
+    files = scan_memory_files(memory_root)
+    candidates = checks.find_stale_review_candidates(files, rules)
+    assert len(candidates) == 1
+    assert candidates[0][0].path.name == "a.md"
+
+
+def test_find_stale_review_candidates_skips_already_marked(memory_root, rules):
+    old_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    marked_body = f"> ⚠ **Possibly stale** — flagged 2026-01-01 (most recent date found: {old_date}, 200d old). Verify still accurate.\n\ndecision made on {old_date}"
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project", marked_body)
+    files = scan_memory_files(memory_root)
+    assert checks.find_stale_review_candidates(files, rules) == []
+
+
+def test_find_stale_review_candidates_disabled(memory_root, rules):
+    rules["staleness"]["enabled"] = False
+    old_date = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    write_memory_file(memory_root, "a.md", "a", "desc a long enough", "project",
+                       f"decision made on {old_date}")
+    files = scan_memory_files(memory_root)
+    assert checks.find_stale_review_candidates(files, rules) == []

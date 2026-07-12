@@ -1,6 +1,6 @@
 import pytest
 
-from dryrun import create_dry_run_copy, diff_memory_index
+from dryrun import create_dry_run_copy, diff_changed_files, diff_memory_index
 
 from .conftest import write_index, write_memory_file
 
@@ -76,3 +76,50 @@ def test_diff_memory_index_missing_files_handled(tmp_path):
     a.mkdir()
     b.mkdir()
     assert diff_memory_index(a, b) == []
+
+
+# ---- diff_changed_files ----
+
+def test_diff_changed_files_reports_modified_body(memory_root, tmp_path):
+    write_memory_file(memory_root, "a.md", "a", "desc", "user", "original body")
+    modified = tmp_path / "modified"
+    create_dry_run_copy(memory_root, modified)
+    (modified / "a.md").write_text(
+        (modified / "a.md").read_text(encoding="utf-8").replace("original body", "changed body"),
+        encoding="utf-8",
+    )
+
+    diffs = diff_changed_files(memory_root, modified)
+    assert len(diffs) == 1
+    rel, diff_lines = diffs[0]
+    assert rel == "a.md"
+    diff_text = "".join(diff_lines)
+    assert "-original body" in diff_text
+    assert "+changed body" in diff_text
+
+
+def test_diff_changed_files_ignores_memory_md(memory_root, tmp_path):
+    write_memory_file(memory_root, "a.md", "a", "desc", "user", "body")
+    write_index(memory_root, ["- [A](a.md) — desc"])
+    modified = tmp_path / "modified"
+    create_dry_run_copy(memory_root, modified)
+    (modified / "MEMORY.md").write_text("# Changed Index\n", encoding="utf-8")
+
+    assert diff_changed_files(memory_root, modified) == []
+
+
+def test_diff_changed_files_empty_when_identical(memory_root, tmp_path):
+    write_memory_file(memory_root, "a.md", "a", "desc", "user", "body")
+    modified = tmp_path / "modified"
+    create_dry_run_copy(memory_root, modified)
+    assert diff_changed_files(memory_root, modified) == []
+
+
+def test_diff_changed_files_handles_new_file_with_no_original(memory_root, tmp_path):
+    modified = tmp_path / "modified"
+    modified.mkdir()
+    write_memory_file(modified, "new.md", "new", "desc", "user", "brand new content")
+
+    diffs = diff_changed_files(memory_root, modified)
+    assert len(diffs) == 1
+    assert diffs[0][0] == "new.md"

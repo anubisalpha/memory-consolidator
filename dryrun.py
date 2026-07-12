@@ -41,3 +41,28 @@ def diff_memory_index(original_root: Path, modified_root: Path) -> list[str]:
     return list(difflib.unified_diff(
         orig_lines, mod_lines, fromfile="MEMORY.md (before)", tofile="MEMORY.md (after)",
     ))
+
+
+def diff_changed_files(original_root: Path, modified_root: Path) -> list[tuple[str, list[str]]]:
+    """Unified diffs for every individual memory file (excluding MEMORY.md,
+    covered separately by diff_memory_index) whose content differs between
+    original_root and modified_root. Needed for full_auto's two fixes
+    (mark_stale_files, merge_exact_duplicates) — unlike apply_safe_fixes,
+    those rewrite individual file bodies rather than only MEMORY.md, so
+    dry-run has to diff more than the index to show their real impact."""
+    out = []
+    for mod_path in sorted(modified_root.rglob("*.md")):
+        if mod_path.name == "MEMORY.md":
+            continue
+        rel = mod_path.relative_to(modified_root)
+        orig_path = original_root / rel
+        mod_text = mod_path.read_text(encoding="utf-8", errors="replace")
+        orig_text = orig_path.read_text(encoding="utf-8", errors="replace") if orig_path.exists() else ""
+        if mod_text == orig_text:
+            continue
+        diff = list(difflib.unified_diff(
+            orig_text.splitlines(keepends=True), mod_text.splitlines(keepends=True),
+            fromfile=f"{rel.as_posix()} (before)", tofile=f"{rel.as_posix()} (after)",
+        ))
+        out.append((rel.as_posix(), diff))
+    return out

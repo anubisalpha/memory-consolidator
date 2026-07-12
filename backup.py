@@ -85,6 +85,51 @@ def create_targeted_snapshot(file_paths: list[Path], root_for_relnames: Path,
     return zip_path
 
 
+def restore_single_file(memory_root: Path, backup_dir: Path, rel_path: str, which: str = "latest") -> Path:
+    """Restores exactly one file's content from a snapshot, leaving every
+    other file in memory_root untouched. Unlike rollback (which replaces
+    the entire area, discarding everything changed since that snapshot),
+    this targets a single unwanted body-rewrite — e.g. an unwanted
+    full_auto duplicate merge or stale marker — without discarding other,
+    wanted changes made since. which='latest' picks the most recent
+    snapshot for this memory_root; a targeted snapshot (create_targeted_
+    snapshot) only contains the files it was told to back up, so 'latest'
+    may not contain rel_path even though older/other snapshots do — pass an
+    explicit timestamp in that case."""
+    manifest = _load_manifest(backup_dir)
+    area_entries = [m for m in manifest if m.get("memory_root") == str(memory_root)]
+    if not area_entries:
+        raise FileNotFoundError(f"No snapshots recorded for {memory_root}")
+
+    if which == "latest":
+        entry = area_entries[-1]
+    else:
+        matches = [m for m in area_entries if m["timestamp"] == which]
+        if not matches:
+            raise FileNotFoundError(f"No snapshot with timestamp {which} for {memory_root}")
+        entry = matches[0]
+
+    zip_path = backup_dir / entry["zip"]
+    if not zip_path.exists():
+        raise FileNotFoundError(f"Snapshot zip missing: {zip_path}")
+
+    rel_posix = rel_path.replace("\\", "/")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        try:
+            data = zf.read(rel_posix)
+        except KeyError:
+            raise FileNotFoundError(
+                f"'{rel_posix}' is not present in snapshot {entry['timestamp']} — it may not have "
+                "existed yet at that point, or that snapshot was a targeted one that didn't include "
+                "it (pass --which to pick a different snapshot)."
+            )
+
+    target = memory_root / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return target
+
+
 def _prune_old_snapshots(backup_dir: Path, memory_root: str, keep_last_n: int) -> None:
     """Deletes the oldest snapshot zips (and their manifest entries) for this
     specific memory_root, keeping only the newest keep_last_n. Scoped by

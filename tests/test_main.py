@@ -17,6 +17,8 @@ def isolated_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "load_decisions", registry.load_decisions)
     monkeypatch.setattr(main, "record_decision", registry.record_decision)
     monkeypatch.setattr(main, "remove_decision", registry.remove_decision)
+    finding_path = tmp_path / "finding_review_decisions.json"
+    monkeypatch.setattr(registry, "FINDING_REGISTRY_PATH", finding_path)
     return path
 
 
@@ -411,6 +413,45 @@ def test_cmd_dry_run_repeated_runs_dont_accumulate(memory_root, tmp_path, monkey
 
     staging_dir = tmp_path / "backups" / "dryrun_main"
     assert sorted(p.name for p in staging_dir.glob("*.md")) == ["MEMORY.md", "orphan.md"]
+
+
+def test_cmd_dry_run_previews_full_auto_body_rewrites(memory_root, tmp_path, monkeypatch, capsys):
+    from datetime import date, timedelta
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    write_memory_file(memory_root, "a.md", "a", "desc a", "project",
+                       f"decided on {old_date}\n\n**Why:** x\n**How to apply:** y")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "full_auto", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": False, "auto_fix_mark_stale": True,
+                    "auto_fix_merge_exact_duplicates": False},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_dry_run(ns())
+    out = capsys.readouterr().out
+    assert "individual file(s) would be modified" in out
+    assert "Possibly stale" in out
+
+    # the real area's file must be completely untouched
+    assert not (memory_root / "a.md").read_text(encoding="utf-8").count("Possibly stale")
+
+
+def test_cmd_dry_run_noop_message_reflects_mode(memory_root, tmp_path, monkeypatch, capsys):
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules(
+        [area], tmp_path,
+        automation={"mode": "apply_safe_fixes", "auto_fix_missing_index_entries": False,
+                    "auto_fix_broken_links": False, "auto_fix_mark_stale": True,
+                    "auto_fix_merge_exact_duplicates": True},
+    )
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    # full_auto-only flags are enabled but mode is apply_safe_fixes, so they
+    # must not count toward "is anything enabled" for dry-run either
+    main.cmd_dry_run(ns())
+    assert "nothing would change" in capsys.readouterr().out
 
 
 def test_cmd_audit_unknown_area_exits(memory_root, tmp_path, monkeypatch, capsys):
@@ -811,6 +852,116 @@ def test_cmd_rollback_restores(memory_root, tmp_path, monkeypatch, capsys):
     main.cmd_rollback(ns(which="latest", force=True))
     assert (memory_root / "a.md").read_text(encoding="utf-8") == "original"
     assert "Rolled back from" in capsys.readouterr().out
+
+
+# ---- cmd_restore_file ----
+
+def test_cmd_restore_file_restores_only_that_file(memory_root, tmp_path, monkeypatch, capsys):
+    (memory_root / "a.md").write_text("original a", encoding="utf-8")
+    (memory_root / "b.md").write_text("original b", encoding="utf-8")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_snapshot(ns(reason="before merge"))
+    capsys.readouterr()
+
+    (memory_root / "a.md").write_text("Pointer only; unwanted merge\n", encoding="utf-8")
+    (memory_root / "b.md").write_text("intentional edit made after the snapshot", encoding="utf-8")
+
+    main.cmd_restore_file(ns(rel_path="a.md", which="latest"))
+    out = capsys.readouterr().out
+    assert "Restored" in out
+
+    assert (memory_root / "a.md").read_text(encoding="utf-8") == "original a"
+    # the unrelated, intentional edit to b.md must survive
+    assert (memory_root / "b.md").read_text(encoding="utf-8") == "intentional edit made after the snapshot"
+
+
+def test_cmd_restore_file_no_snapshots_raises(memory_root, tmp_path, monkeypatch):
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    with pytest.raises(FileNotFoundError):
+        main.cmd_restore_file(ns(rel_path="a.md", which="latest"))
+
+
+# ---- cmd_review_findings ----
+
+def test_cmd_review_findings_non_interactive_lists_candidates(memory_root, tmp_path, monkeypatch, capsys):
+    from datetime import date, timedelta
+    old_date = (date.today() - timedelta(days=200)).isoformat()
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b", "user", body)
+    write_memory_file(memory_root, "c.md", "c", "desc c", "project", f"decided on {old_date}")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_review_findings(ns(non_interactive=True))
+    out = capsys.readouterr().out
+    assert "duplicate ratio=1.00" in out
+    assert "[stale]" in out
+
+
+def test_cmd_review_findings_noop_when_nothing_to_review(memory_root, tmp_path, monkeypatch, capsys):
+    write_memory_file(memory_root, "a.md", "a", "a valid description here", "user", "unique body content")
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_review_findings(ns(non_interactive=True))
+    assert "No unreviewed duplicate/staleness findings" in capsys.readouterr().out
+
+
+def test_cmd_review_findings_dismiss_records_decision_and_suppresses_next_audit(
+    memory_root, tmp_path, monkeypatch, capsys,
+):
+    body = "identical content here, long enough to pass the floor " * 3
+    write_memory_file(memory_root, "a.md", "a", "desc a", "user", body)
+    write_memory_file(memory_root, "b.md", "b", "desc b", "user", body)
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    answers = iter(["d", "these are intentionally similar templates"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    main.cmd_review_findings(ns(non_interactive=False))
+    out = capsys.readouterr().out
+    assert "Recorded" in out
+    assert "dismissed" in out
+
+    main.cmd_review_findings_list(ns())
+    assert "dismissed" in capsys.readouterr().out
+
+    # audit must no longer surface this specific pair
+    main.cmd_audit(ns())
+    audit_out = capsys.readouterr().out
+    assert "merge candidate" not in audit_out
+
+
+def test_cmd_review_findings_forget_reopens_for_review(memory_root, tmp_path, monkeypatch, capsys):
+    import registry
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+    registry.record_finding_decision("main", "a.md", "stale", "dismissed", "note")
+
+    main.cmd_review_findings_forget(ns(category="stale", key="a.md"))
+    out = capsys.readouterr().out
+    assert "Removed decision" in out
+    assert registry.load_finding_decisions("main") == []
+
+
+def test_cmd_review_findings_forget_not_found(memory_root, tmp_path, monkeypatch, capsys):
+    area = ResolvedArea("main", memory_root, "full")
+    rules = make_rules([area], tmp_path)
+    monkeypatch.setattr(main, "get_config", lambda **kw: rules)
+
+    main.cmd_review_findings_forget(ns(category="stale", key="nonexistent.md"))
+    assert "No decision found" in capsys.readouterr().out
 
 
 # ---- main() argument parsing / dispatch ----

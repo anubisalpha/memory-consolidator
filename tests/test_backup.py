@@ -2,7 +2,7 @@ import zipfile
 
 import pytest
 
-from backup import create_snapshot, create_targeted_snapshot, list_snapshots, rollback
+from backup import create_snapshot, create_targeted_snapshot, list_snapshots, restore_single_file, rollback
 
 
 @pytest.fixture
@@ -180,3 +180,64 @@ def test_create_targeted_snapshot_prunes_older_snapshots(memory_root, backup_dir
     snapshots = list_snapshots(backup_dir)
     assert len(snapshots) == 2
     assert [s["reason"] for s in snapshots] == ["v2", "v3"]
+
+
+# ---- restore_single_file ----
+
+def test_restore_single_file_restores_only_that_file(memory_root, backup_dir):
+    (memory_root / "a.md").write_text("original a", encoding="utf-8")
+    (memory_root / "b.md").write_text("original b", encoding="utf-8")
+    create_snapshot(memory_root, backup_dir, reason="before changes")
+
+    (memory_root / "a.md").write_text("mutated a", encoding="utf-8")
+    (memory_root / "b.md").write_text("mutated b", encoding="utf-8")
+
+    restored = restore_single_file(memory_root, backup_dir, "a.md")
+
+    assert restored == memory_root / "a.md"
+    assert (memory_root / "a.md").read_text(encoding="utf-8") == "original a"
+    assert (memory_root / "b.md").read_text(encoding="utf-8") == "mutated b"  # untouched
+
+
+def test_restore_single_file_by_specific_timestamp(memory_root, backup_dir):
+    (memory_root / "a.md").write_text("v1", encoding="utf-8")
+    create_snapshot(memory_root, backup_dir, reason="v1")
+    first_ts = list_snapshots(backup_dir)[0]["timestamp"]
+
+    (memory_root / "a.md").write_text("v2", encoding="utf-8")
+    create_snapshot(memory_root, backup_dir, reason="v2")
+    (memory_root / "a.md").write_text("v3 (unwanted)", encoding="utf-8")
+
+    restore_single_file(memory_root, backup_dir, "a.md", which=first_ts)
+    assert (memory_root / "a.md").read_text(encoding="utf-8") == "v1"
+
+
+def test_restore_single_file_no_snapshots_raises(memory_root, backup_dir):
+    with pytest.raises(FileNotFoundError):
+        restore_single_file(memory_root, backup_dir, "a.md")
+
+
+def test_restore_single_file_unknown_timestamp_raises(memory_root, backup_dir):
+    (memory_root / "a.md").write_text("v1", encoding="utf-8")
+    create_snapshot(memory_root, backup_dir, reason="v1")
+    with pytest.raises(FileNotFoundError):
+        restore_single_file(memory_root, backup_dir, "a.md", which="2000-01-01_000000")
+
+
+def test_restore_single_file_missing_from_targeted_snapshot_raises(memory_root, backup_dir):
+    (memory_root / "a.md").write_text("content", encoding="utf-8")
+    (memory_root / "untouched.md").write_text("not backed up", encoding="utf-8")
+    create_targeted_snapshot([memory_root / "a.md"], memory_root, backup_dir, reason="targeted")
+
+    with pytest.raises(FileNotFoundError):
+        restore_single_file(memory_root, backup_dir, "untouched.md")
+
+
+def test_restore_single_file_only_considers_matching_memory_root(memory_root, backup_dir, tmp_path):
+    other_root = tmp_path / "other_area"
+    other_root.mkdir()
+    (other_root / "a.md").write_text("other area content", encoding="utf-8")
+    create_snapshot(other_root, backup_dir, reason="other area snapshot")
+
+    with pytest.raises(FileNotFoundError):
+        restore_single_file(memory_root, backup_dir, "a.md")

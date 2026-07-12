@@ -4,15 +4,23 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from backup import create_snapshot, create_targeted_snapshot, list_snapshots, rollback
-from checks import compliance_score, run_all_checks
+from backup import create_snapshot, create_targeted_snapshot, list_snapshots, restore_single_file, rollback
+from checks import compliance_score, find_duplicate_review_candidates, find_stale_review_candidates, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
 from consolidate import write_canonical_file, write_pointer_stub
 from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
-from dryrun import create_dry_run_copy, diff_memory_index
+from dryrun import create_dry_run_copy, diff_changed_files, diff_memory_index
 from fixer import add_missing_index_entries, mark_stale_files, merge_exact_duplicates, remove_dead_index_links
-from registry import load_decisions, record_decision, remove_decision
+from registry import (
+    finding_decision_map,
+    load_decisions,
+    load_finding_decisions,
+    record_decision,
+    record_finding_decision,
+    remove_decision,
+    remove_finding_decision,
+)
 from report import print_console, print_cross_area_console, write_cross_area_report, write_markdown_report
 from reviewer import find_review_candidates
 from scanner import parse_index, scan_memory_files, scan_memory_files_scoped
@@ -76,7 +84,12 @@ def cmd_audit(args) -> None:
             files = scan_memory_files_scoped(area.root, rules.get("memory_file_patterns", []), area_name=area.name)
             index_entries, index_lines = [], []
 
-        findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode)
+        dismissed_duplicates = {k for k, d in finding_decision_map(area.name, "duplicate").items()
+                                 if d.decision == "dismissed"}
+        dismissed_stale = {k for k, d in finding_decision_map(area.name, "stale").items()
+                            if d.decision == "dismissed"}
+        findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode,
+                                   dismissed_duplicates=dismissed_duplicates, dismissed_stale=dismissed_stale)
         score = compliance_score(findings, len(files))
 
         print_console(findings, area.root, score=score)
@@ -112,15 +125,16 @@ def cmd_audit(args) -> None:
 
             files = scan_memory_files(area.root, area_name=area.name)
             index_entries, index_lines = parse_index(area.root)
-            new_findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode)
+            new_findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode,
+                                           dismissed_duplicates=dismissed_duplicates, dismissed_stale=dismissed_stale)
             new_score = compliance_score(new_findings, len(files))
             print(f"\nRe-audit after fixes — score: {score:.1f} -> {new_score:.1f}/100 "
                   f"({len(findings)} -> {len(new_findings)} findings)")
 
 
 def cmd_dry_run(args) -> None:
-    """Preview apply_safe_fixes on a disposable copy of the area — never
-    touches the real area, regardless of automation.mode."""
+    """Preview apply_safe_fixes/full_auto on a disposable copy of the area —
+    never touches the real area, regardless of automation.mode."""
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
 
@@ -130,10 +144,13 @@ def cmd_dry_run(args) -> None:
         return
 
     auto_cfg = rules["automation"]
-    if not auto_cfg.get("auto_fix_missing_index_entries", False) and \
-       not auto_cfg.get("auto_fix_broken_links", False):
-        print("Both auto_fix_* flags are disabled in rules.md — nothing would change. "
-              "Enable at least one to preview its effect.")
+    mode = auto_cfg.get("mode")
+    flag_names = ["auto_fix_missing_index_entries", "auto_fix_broken_links"]
+    if mode == "full_auto":
+        flag_names += ["auto_fix_mark_stale", "auto_fix_merge_exact_duplicates"]
+    if not any(auto_cfg.get(f, False) for f in flag_names):
+        print(f"No auto_fix_* flag applicable to automation.mode '{mode}' is enabled in rules.md — "
+              "nothing would change. Enable at least one to preview its effect.")
         return
 
     backup_dir = Path(rules["paths"]["backup_dir"])
@@ -160,6 +177,13 @@ def cmd_dry_run(args) -> None:
         print("\nMEMORY.md diff (before -> after):\n")
         print("".join(diff_lines))
 
+    file_diffs = diff_changed_files(area.root, staging_dir)
+    if file_diffs:
+        print(f"\n{len(file_diffs)} individual file(s) would be modified "
+              "(full_auto's body-touching fixes):\n")
+        for _, diff in file_diffs:
+            print("".join(diff))
+
     orig_files = scan_memory_files(area.root, area_name=area.name)
     orig_entries, orig_lines = parse_index(area.root)
     orig_findings = run_all_checks(area.root, orig_files, orig_entries, orig_lines, rules, mode="full")
@@ -173,7 +197,7 @@ def cmd_dry_run(args) -> None:
     print(f"\nScore if applied: {orig_score:.1f} -> {new_score:.1f}/100 "
           f"({len(orig_findings)} -> {len(new_findings)} findings)")
     print(f"\nStaging copy left at {staging_dir} for inspection — the real area is untouched.")
-    print(f"Satisfied? Set automation.mode: apply_safe_fixes in rules.md and run "
+    print(f"Satisfied? Confirm automation.mode: {mode} in rules.md and run "
           f"`audit --area {area.name}` to apply for real.")
 
 
@@ -430,6 +454,103 @@ def cmd_review_forget(args) -> None:
         print(f"No decision found for '{args.rel_path}' in area '{area.name}'.")
 
 
+def cmd_review_findings(args) -> None:
+    """Interactive triage for near-duplicate content and stale-but-not-
+    auto-marked files — findings that otherwise resurface unchanged in
+    every audit report with no way to say 'seen it, not an issue'. Distinct
+    from `review` (reviewer.py's find_review_candidates), which is about a
+    file's shape not cleanly fitting the canonical spec, not a content
+    judgment call about two files or one file's freshness."""
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    if area.mode == "full":
+        files = scan_memory_files(area.root, area_name=area.name)
+    else:
+        files = scan_memory_files_scoped(area.root, rules.get("memory_file_patterns", []), area_name=area.name)
+
+    dup_decided = finding_decision_map(area.name, "duplicate")
+    stale_decided = finding_decision_map(area.name, "stale")
+
+    def dup_key(a, b) -> str:
+        rel_a = a.path.relative_to(area.root).as_posix()
+        rel_b = b.path.relative_to(area.root).as_posix()
+        return "::".join(sorted([rel_a, rel_b]))
+
+    dup_pairs = [(a, b, r) for a, b, r in find_duplicate_review_candidates(files, rules)
+                 if dup_key(a, b) not in dup_decided]
+    stale_files = [(f, reason) for f, reason in find_stale_review_candidates(files, rules)
+                   if f.path.relative_to(area.root).as_posix() not in stale_decided]
+
+    total = len(dup_pairs) + len(stale_files)
+    if total == 0:
+        print(f"No unreviewed duplicate/staleness findings in area '{area.name}'.")
+        return
+
+    if args.non_interactive:
+        print(f"{total} finding(s) need review in area '{area.name}' "
+              "(run without --non-interactive to review interactively):")
+        for a, b, ratio in dup_pairs:
+            print(f"  [duplicate ratio={ratio:.2f}] {a.path.name} <-> {b.path.name}")
+        for f, reason in stale_files:
+            print(f"  [stale] {f.path.name} — {reason}")
+        return
+
+    print(f"{total} finding(s) to review in area '{area.name}'.\n")
+    print("For each: [d]ismiss (not an issue, suppress from future reports),")
+    print("          [s]kip (leave undecided, ask again next time),")
+    print("          [q]uit review session.\n")
+
+    for a, b, ratio in dup_pairs:
+        rel_a = a.path.relative_to(area.root).as_posix()
+        rel_b = b.path.relative_to(area.root).as_posix()
+        print(f"\n--- duplicate candidate (ratio={ratio:.2f}) ---")
+        print(f"  {rel_a}")
+        print(f"  {rel_b}")
+        answer = input("Decision [d/s/q]: ").strip().lower()
+        if answer == "q":
+            print("Stopping review session.")
+            return
+        if answer == "d":
+            note = input("Note (why dismissed — shown in future audits): ").strip()
+            key = dup_key(a, b)
+            record_finding_decision(area.name, key, "duplicate", "dismissed", note)
+            print(f"Recorded: {key} -> dismissed")
+
+    for f, reason in stale_files:
+        rel = f.path.relative_to(area.root).as_posix()
+        print(f"\n--- stale candidate ---")
+        print(f"  {rel} — {reason}")
+        answer = input("Decision [d/s/q]: ").strip().lower()
+        if answer == "q":
+            print("Stopping review session.")
+            return
+        if answer == "d":
+            note = input("Note (why dismissed — shown in future audits): ").strip()
+            record_finding_decision(area.name, rel, "stale", "dismissed", note)
+            print(f"Recorded: {rel} -> dismissed")
+
+
+def cmd_review_findings_list(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    decisions = load_finding_decisions(area.name)
+    if not decisions:
+        print(f"No recorded finding-review decisions for area '{area.name}'.")
+        return
+    for d in decisions:
+        print(f"{d.category:10} {d.decision:10} {d.key:60} ({d.reviewed_at})  {d.note}")
+
+
+def cmd_review_findings_forget(args) -> None:
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    removed = remove_finding_decision(area.name, args.key, args.category)
+    if removed:
+        print(f"Removed decision for '{args.key}' ({args.category}) in area '{area.name}' — will be reviewed again.")
+    else:
+        print(f"No decision found for '{args.key}' ({args.category}) in area '{area.name}'.")
+
+
 def cmd_snapshot(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
@@ -454,6 +575,19 @@ def cmd_rollback(args) -> None:
     ensure_backup_safe_for_area(area, backup_dir)
     zip_path = rollback(area.root, backup_dir, which=args.which, force=args.force)
     print(f"Rolled back from: {zip_path}")
+
+
+def cmd_restore_file(args) -> None:
+    """Undo a single unwanted file-body rewrite (e.g. a full_auto duplicate
+    merge or stale marker you disagree with) without a full-area rollback —
+    restores just that one file's content from a snapshot, leaving
+    everything else in the area exactly as it is now."""
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    backup_dir = Path(rules["paths"]["backup_dir"])
+    ensure_backup_safe_for_area(area, backup_dir)
+    restored = restore_single_file(area.root, backup_dir, args.rel_path, which=args.which)
+    print(f"Restored {restored} from snapshot ({args.which}). Other files in the area are untouched.")
 
 
 def main() -> None:
@@ -504,6 +638,20 @@ def main() -> None:
     p_review_forget.add_argument("rel_path", help="path relative to the area's root, e.g. 'sub/file.md'")
     p_review_forget.set_defaults(func=cmd_review_forget)
 
+    p_review_findings = sub.add_parser("review-findings", help="interactively triage near-duplicate content and stale-but-not-auto-marked files")
+    p_review_findings.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review_findings.set_defaults(func=cmd_review_findings)
+
+    p_review_findings_list = sub.add_parser("review-findings-list", help="list recorded duplicate/staleness review decisions for an area")
+    p_review_findings_list.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review_findings_list.set_defaults(func=cmd_review_findings_list)
+
+    p_review_findings_forget = sub.add_parser("review-findings-forget", help="remove a duplicate/staleness review decision so it's reviewed again")
+    p_review_findings_forget.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_review_findings_forget.add_argument("category", choices=["duplicate", "stale"])
+    p_review_findings_forget.add_argument("key", help="rel_path for 'stale'; 'a.md::b.md' (sorted) for 'duplicate'")
+    p_review_findings_forget.set_defaults(func=cmd_review_findings_forget)
+
     p_snap = sub.add_parser("snapshot", help="manually snapshot an area's root")
     p_snap.add_argument("--area", default=None, help="required if multiple areas are configured")
     p_snap.add_argument("--reason", default=None)
@@ -517,6 +665,12 @@ def main() -> None:
     p_roll.add_argument("--which", default="latest", help="timestamp of snapshot, or 'latest'")
     p_roll.add_argument("--force", action="store_true", help="skip confirmation prompt")
     p_roll.set_defaults(func=cmd_rollback)
+
+    p_restore_file = sub.add_parser("restore-file", help="restore a single file's content from a snapshot, without touching anything else in the area (undo one full_auto body-rewrite)")
+    p_restore_file.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_restore_file.add_argument("--which", default="latest", help="timestamp of snapshot, or 'latest'")
+    p_restore_file.add_argument("rel_path", help="path relative to the area's root, e.g. 'file.md'")
+    p_restore_file.set_defaults(func=cmd_restore_file)
 
     args = parser.parse_args()
     try:

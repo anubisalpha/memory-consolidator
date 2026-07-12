@@ -64,6 +64,9 @@ class IndexEntry:
     line_no: int
 
 
+STALE_MARKER_PREFIX = "> ⚠ **Possibly stale**"
+
+
 def is_pointer_stub(body: str) -> bool:
     """Matches consolidate.write_pointer_stub's convention (also used by
     the pre-existing 'pointer only' memory convention). A pointer stub's

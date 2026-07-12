@@ -5,7 +5,7 @@ from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from scanner import IndexEntry, MemoryFile, is_pointer_stub
+from scanner import STALE_MARKER_PREFIX, IndexEntry, MemoryFile, is_pointer_stub
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -211,10 +211,21 @@ def check_code_derivable(files: list[MemoryFile], rules: dict) -> list[Finding]:
     return out
 
 
-def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
+def _duplicate_key(memory_root: Path, a: MemoryFile, b: MemoryFile) -> str:
+    """Matches review-findings' pairing key: an unordered pair of rel paths,
+    so a dismissal recorded as (a, b) also matches when the pair is later
+    encountered as (b, a)."""
+    rel_a = a.path.relative_to(memory_root).as_posix()
+    rel_b = b.path.relative_to(memory_root).as_posix()
+    return "::".join(sorted([rel_a, rel_b]))
+
+
+def check_duplicates(files: list[MemoryFile], rules: dict, memory_root: Path | None = None,
+                      dismissed: set[str] | None = None) -> list[Finding]:
     cfg = rules["duplicate_detection"]
     if not cfg["enabled"]:
         return []
+    dismissed = dismissed or set()
     out = []
     n = len(files)
     max_pairwise = cfg.get("max_files_for_pairwise", 800)
@@ -243,6 +254,8 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
             # skip comparisons below a floor to avoid that false positive.
             if len(a.body.strip()) < min_body_len or len(b.body.strip()) < min_body_len:
                 continue
+            if memory_root is not None and _duplicate_key(memory_root, a, b) in dismissed:
+                continue  # a human already reviewed this exact pair via `review-findings`
             ratio = SequenceMatcher(None, a.body, b.body).ratio()
             if ratio >= cfg["merge_threshold"]:
                 out.append(Finding("warn", "duplicate", f"near-identical to '{b.path.name}' (ratio={ratio:.2f}) — merge candidate", ref=_ref(a.path)))
@@ -251,15 +264,19 @@ def check_duplicates(files: list[MemoryFile], rules: dict) -> list[Finding]:
     return out
 
 
-def check_staleness(files: list[MemoryFile], rules: dict) -> list[Finding]:
+def check_staleness(files: list[MemoryFile], rules: dict, memory_root: Path | None = None,
+                     dismissed: set[str] | None = None) -> list[Finding]:
     cfg = rules["staleness"]
     if not cfg["enabled"]:
         return []
+    dismissed = dismissed or set()
     out = []
     today = date.today()
     for f in files:
         if f.parse_error or f.mem_type not in ("project", "feedback"):
             continue
+        if memory_root is not None and f.path.relative_to(memory_root).as_posix() in dismissed:
+            continue  # a human already reviewed this file via `review-findings`
         dates_found = []
         for y, m, d in DATE_RE.findall(f.body):
             try:
@@ -285,6 +302,67 @@ def check_staleness(files: list[MemoryFile], rules: dict) -> list[Finding]:
         age = (today - mtime).days
         if age >= mtime_days:
             out.append(Finding("info", "stale_mtime", f"not modified in {age}d (low confidence signal)", ref=_ref(f.path)))
+    return out
+
+
+def find_duplicate_review_candidates(files: list[MemoryFile], rules: dict) -> list[tuple[MemoryFile, MemoryFile, float]]:
+    """Like check_duplicates, but returns the actual MemoryFile pairs (not
+    one-sided Findings) for review-findings' human triage flow. Covers the
+    near-duplicate band (review_threshold <= ratio < merge_threshold) plus
+    exact matches (ratio == 1.0) — outside full_auto mode, nothing
+    auto-merges exact duplicates either, so they're just as much a human
+    judgment call as near-duplicates are."""
+    cfg = rules["duplicate_detection"]
+    if not cfg["enabled"]:
+        return []
+    min_body_len = cfg.get("min_body_length_for_comparison", 20)
+    max_pairwise = cfg.get("max_files_for_pairwise", 800)
+    candidates = [f for f in files if not f.parse_error and not is_pointer_stub(f.body)
+                  and len(f.body.strip()) >= min_body_len]
+    if len(candidates) > max_pairwise:
+        return []
+    out = []
+    n = len(candidates)
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = candidates[i], candidates[j]
+            if not cfg["compare_across_types"] and a.mem_type != b.mem_type:
+                continue
+            ratio = SequenceMatcher(None, a.body, b.body).ratio()
+            if ratio >= cfg["review_threshold"]:
+                out.append((a, b, ratio))
+    return out
+
+
+def find_stale_review_candidates(files: list[MemoryFile], rules: dict) -> list[tuple[MemoryFile, str]]:
+    """Like check_staleness's date-based 'stale' signal (not the
+    low-confidence mtime fallback), but returns MemoryFile objects for
+    review-findings' human triage flow. Skips files that already carry
+    full_auto's staleness marker — nothing to review there, it's already
+    been acted on."""
+    cfg = rules["staleness"]
+    if not cfg["enabled"]:
+        return []
+    out = []
+    today = date.today()
+    for f in files:
+        if f.parse_error or f.mem_type not in ("project", "feedback"):
+            continue
+        if f.body.lstrip().startswith(STALE_MARKER_PREFIX):
+            continue
+        past_dates = []
+        for y, m, d in DATE_RE.findall(f.body):
+            try:
+                past_dates.append(date(int(y), int(m), int(d)))
+            except ValueError:
+                continue
+        past_dates = [d for d in past_dates if d < today]
+        if not past_dates:
+            continue
+        most_recent = max(past_dates)
+        age_days = (today - most_recent).days
+        if age_days >= cfg["likely_stale_days"]:
+            out.append((f, f"most recent date {most_recent} is {age_days}d old"))
     return out
 
 
@@ -381,10 +459,16 @@ def compliance_score(findings: list["Finding"], total_files: int) -> float:
 
 
 def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: list[IndexEntry],
-                    index_lines: list[str], rules: dict, mode: str = "full") -> list[Finding]:
+                    index_lines: list[str], rules: dict, mode: str = "full",
+                    dismissed_duplicates: set[str] | None = None,
+                    dismissed_stale: set[str] | None = None) -> list[Finding]:
     """mode='scoped' areas have no single MEMORY.md index to speak of (they're
     a whole project/workspace, not a dedicated memory folder), so index-shaped
-    checks (orphans, dead links, index size) don't apply there."""
+    checks (orphans, dead links, index size) don't apply there.
+
+    dismissed_duplicates/dismissed_stale are the keys of decisions recorded
+    via `review-findings` (see registry.FindingDecision) — findings a human
+    already reviewed and confirmed aren't real issues stop resurfacing here."""
     findings = []
     findings += check_malformed_files(files)
     findings += check_missing_frontmatter_fields(files, rules)
@@ -401,7 +485,7 @@ def run_all_checks(memory_root: Path, files: list[MemoryFile], index_entries: li
     findings += check_code_derivable(files, rules)
     findings += check_external_pointers(files, rules)
     findings += check_duplicate_slugs(files)
-    findings += check_duplicates(files, rules)
-    findings += check_staleness(files, rules)
+    findings += check_duplicates(files, rules, memory_root, dismissed_duplicates)
+    findings += check_staleness(files, rules, memory_root, dismissed_stale)
     findings += check_file_length(files, rules)
     return findings

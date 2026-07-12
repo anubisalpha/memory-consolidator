@@ -19,11 +19,10 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from checks import DATE_RE
-from scanner import IndexEntry, MemoryFile, is_pointer_stub
+from scanner import STALE_MARKER_PREFIX, IndexEntry, MemoryFile, is_pointer_stub
 
 
 DEFAULT_INDEX_HEADER = "# Memory Index\n\n"
-STALE_MARKER_PREFIX = "> ⚠ **Possibly stale**"
 
 
 def add_missing_index_entries(area_root: Path, files: list[MemoryFile],
