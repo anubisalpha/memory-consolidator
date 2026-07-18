@@ -75,7 +75,7 @@ def cmd_audit(args) -> None:
     report_dir = Path(rules["paths"]["report_dir"])
 
     for area in areas:
-        print(f"\n=== Area: {area.name} ({area.mode}) — {area.root} ===")
+        print(f"\n=== Area: {area.name} ({area.mode}) — {area.root} ===", flush=True)
 
         if area.mode == "full":
             files = scan_memory_files(area.root, area_name=area.name)
@@ -101,16 +101,20 @@ def cmd_audit(args) -> None:
         print(f"Report written to: {report_path}")
 
         if rules["automation"]["mode"] != "report_only":
-            backup_dir = Path(rules["paths"]["backup_dir"])
-            ensure_backup_safe_for_area(area, backup_dir)
-            snap = create_snapshot(area.root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']}) [{area.name}]",
-                                    keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
-            print(f"Snapshot created before any apply step: {snap}")
-
             if area.mode != "full":
                 print(f"Area '{area.name}' is 'scoped' — auto-fix only applies to 'full' mode "
-                      "areas (there's no single MEMORY.md index to fix here).")
+                      "areas (there's no single MEMORY.md index to fix here). Skipping snapshot "
+                      "too: a scoped area's root can be an entire workspace (many GB, node_modules, "
+                      ".git, etc.) and a full-tree snapshot there is both unnecessary — nothing here "
+                      "ever gets written to — and previously caused multi-minute-plus silent stalls.")
                 continue
+
+            backup_dir = Path(rules["paths"]["backup_dir"])
+            ensure_backup_safe_for_area(area, backup_dir)
+            print(f"Creating pre-apply snapshot of '{area.name}' ({area.root})...", flush=True)
+            snap = create_snapshot(area.root, backup_dir, reason=f"pre-apply ({rules['automation']['mode']}) [{area.name}]",
+                                    keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
+            print(f"Snapshot created before any apply step: {snap}", flush=True)
 
             actions = _apply_fixes(area.root, files, index_entries, index_lines, rules,
                                     index_header=area.index_header)
