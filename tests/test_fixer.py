@@ -1,6 +1,12 @@
 from datetime import date, timedelta
 
-from fixer import add_missing_index_entries, mark_stale_files, merge_exact_duplicates, remove_dead_index_links
+from fixer import (
+    add_missing_index_entries,
+    fix_slug_mismatches,
+    mark_stale_files,
+    merge_exact_duplicates,
+    remove_dead_index_links,
+)
 from scanner import parse_index, parse_memory_file, scan_memory_files
 
 from .conftest import write_index, write_memory_file
@@ -208,3 +214,61 @@ def test_merge_exact_duplicates_disabled(memory_root, rules):
     write_memory_file(memory_root, "z.md", "z", "desc z", "user", body)
     files = scan_memory_files(memory_root)
     assert merge_exact_duplicates(files, rules) == []
+
+
+# ---- fix_slug_mismatches ----
+
+def test_fix_slug_mismatches_renames_file_to_match_kebab_name(memory_root, rules):
+    write_memory_file(memory_root, "aity_brand_website.md", "aity-brand-website", "desc", "project", "body")
+    write_index(memory_root, ["- [Aity](aity_brand_website.md) — desc"])
+    files = scan_memory_files(memory_root)
+
+    actions = fix_slug_mismatches(memory_root, files, rules)
+
+    assert len(actions) == 1
+    assert "aity_brand_website.md -> aity-brand-website.md" in actions[0]
+    assert not (memory_root / "aity_brand_website.md").exists()
+    assert (memory_root / "aity-brand-website.md").exists()
+    _, index_lines = parse_index(memory_root)
+    assert any("aity-brand-website.md" in line for line in index_lines)
+    assert not any("aity_brand_website.md" in line for line in index_lines)
+
+
+def test_fix_slug_mismatches_normalizes_non_kebab_name_and_renames(memory_root, rules):
+    write_memory_file(memory_root, "tournament_dashboard_project.md",
+                       "tournament_dashboard_project", "desc", "project", "body")
+    files = scan_memory_files(memory_root)
+
+    actions = fix_slug_mismatches(memory_root, files, rules)
+
+    assert any("renamed tournament_dashboard_project.md -> tournament-dashboard-project.md" in a for a in actions)
+    new_path = memory_root / "tournament-dashboard-project.md"
+    assert new_path.exists()
+    reparsed = parse_memory_file(new_path)
+    assert reparsed.frontmatter["name"] == "tournament-dashboard-project"
+
+
+def test_fix_slug_mismatches_skips_on_collision(memory_root, rules):
+    write_memory_file(memory_root, "a_b.md", "a-b", "desc", "user", "body one")
+    write_memory_file(memory_root, "a-b.md", "a-b", "desc", "user", "body two")
+    files = scan_memory_files(memory_root)
+
+    actions = fix_slug_mismatches(memory_root, files, rules)
+
+    assert any("skipped slug fix for a_b.md" in a for a in actions)
+    assert (memory_root / "a_b.md").exists()  # left alone, not overwritten or deleted
+    assert (memory_root / "a-b.md").exists()
+
+
+def test_fix_slug_mismatches_noop_when_already_matching(memory_root, rules):
+    write_memory_file(memory_root, "already-kebab.md", "already-kebab", "desc", "user", "body")
+    files = scan_memory_files(memory_root)
+    assert fix_slug_mismatches(memory_root, files, rules) == []
+
+
+def test_fix_slug_mismatches_disabled_via_rules(memory_root, rules):
+    rules["spec_conformance"]["require_kebab_case_slug"] = False
+    write_memory_file(memory_root, "aity_brand_website.md", "aity-brand-website", "desc", "project", "body")
+    files = scan_memory_files(memory_root)
+    assert fix_slug_mismatches(memory_root, files, rules) == []
+    assert (memory_root / "aity_brand_website.md").exists()

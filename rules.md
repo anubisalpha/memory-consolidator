@@ -116,11 +116,12 @@ automation:
   # per flag.
   auto_fix_missing_index_entries: true   # append an index line for each orphan file (never rewrites existing lines)
   auto_fix_broken_links: false            # remove MEMORY.md lines whose href no longer exists (never touches valid lines)
-  # These two flags ONLY take effect under full_auto (never apply_safe_fixes)
+  # These three flags ONLY take effect under full_auto (never apply_safe_fixes)
   # — see fixer.py's module docstring for why they're allowed to touch
   # individual file bodies where the two flags above never do.
   auto_fix_mark_stale: true                # prepend a visible staleness marker to flagged files (never removes content)
   auto_fix_merge_exact_duplicates: true    # turn byte-identical duplicate files into pointer stubs (exact matches only)
+  auto_fix_slug_mismatch: true             # rename file / normalize frontmatter name so both agree on one kebab-case slug (skips on collision)
   require_backup_before_apply: true       # hardcoded safety net, not actually togglable in code
 
 reporting:
@@ -141,19 +142,24 @@ backup_retention:
     broken-links only *removes* lines whose target no longer exists —
     neither ever rewrites or reinterprets existing valid content, and
     neither touches individual memory files, only `MEMORY.md` itself.
-  - `full_auto` — runs everything `apply_safe_fixes` does, plus two more
-    fixes gated by `auto_fix_mark_stale` / `auto_fix_merge_exact_duplicates`.
-    Unlike the two `apply_safe_fixes` fixes, these touch individual memory
-    files' bodies, not just `MEMORY.md` — but each is scoped to stay
-    content-preserving: `mark_stale_files` only prepends a visible marker
-    (never removes text) to files matching `check_staleness`'s date-based
-    'stale' signal (not the low-confidence mtime fallback), and
-    `merge_exact_duplicates` only rewrites a file into a pointer stub when
-    its body is byte-identical to another file's (ratio == 1.0) — anything
-    short of an exact match (the near-duplicate thresholds
-    `check_duplicates` reports) is left as a judgment call for a human,
-    same as cross-area conflicts are left to `resolve-conflicts`. Still
-    always backed up first.
+  - `full_auto` — runs everything `apply_safe_fixes` does, plus three more
+    fixes gated by `auto_fix_mark_stale` / `auto_fix_merge_exact_duplicates` /
+    `auto_fix_slug_mismatch`. Unlike the two `apply_safe_fixes` fixes, these
+    touch individual memory files' bodies, not just `MEMORY.md` — but each is
+    scoped to stay content-preserving or narrowly bounded: `mark_stale_files`
+    only prepends a visible marker (never removes text) to files matching
+    `check_staleness`'s date-based 'stale' signal (not the low-confidence
+    mtime fallback), `merge_exact_duplicates` only rewrites a file into a
+    pointer stub when its body is byte-identical to another file's
+    (ratio == 1.0) — anything short of an exact match (the near-duplicate
+    thresholds `check_duplicates` reports) is left as a judgment call for a
+    human, same as cross-area conflicts are left to `resolve-conflicts` —
+    and `fix_slug_mismatches` only renames a file / normalizes its `name:`
+    field so both agree on one kebab-case slug, skipping (not forcing) any
+    case where the target filename would collide with another real file.
+    Only applies to `full` mode areas (a `scoped` area's root can be an
+    entire workspace, and never gets any snapshot/write at all — see
+    `main.py`'s `cmd_audit`). Still always backed up first.
 - Backups and reports live in this project folder, never inside any area's
   root, so they can never be picked up by anything that loads `MEMORY.md`
   into context.

@@ -6,19 +6,22 @@ are already broken — they never rewrite or reinterpret existing valid
 content, and they never touch individual memory files' bodies, only
 MEMORY.md itself.
 
-full_auto-tier functions (mark_stale_files, merge_exact_duplicates) are a
-deliberate exception to that "never touch file bodies" rule, gated to
-full_auto only and each behind its own opt-in flag. Both are still
-content-preserving: mark_stale_files only prepends a visible marker (never
-removes text), and merge_exact_duplicates only acts on byte-identical
-bodies (so nothing distinguishable is lost by pointing one at the other) —
-see each function's docstring for the specific safety argument."""
+full_auto-tier functions (mark_stale_files, merge_exact_duplicates,
+fix_slug_mismatches) are a deliberate exception to that "never touch file
+bodies" rule, gated to full_auto only and each behind its own opt-in flag.
+All three are still content-preserving or narrowly scoped: mark_stale_files
+only prepends a visible marker (never removes text), merge_exact_duplicates
+only acts on byte-identical bodies (so nothing distinguishable is lost by
+pointing one at the other), and fix_slug_mismatches only renames a file
+and/or normalizes its own `name:` field to agree with each other — see each
+function's docstring for the specific safety argument."""
+import re
 import yaml
 from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from checks import DATE_RE
+from checks import DATE_RE, KEBAB_RE
 from scanner import STALE_MARKER_PREFIX, IndexEntry, MemoryFile, is_pointer_stub
 
 
@@ -184,4 +187,70 @@ def merge_exact_duplicates(files: list[MemoryFile], rules: dict) -> list[str]:
             _rewrite_body(b, stub_body)
             merged.add(b.path.name)
             out.append(f"merged exact duplicate: {b.path.name} -> {a.path.name}")
+    return out
+
+
+def _to_kebab_case(s: str) -> str:
+    """Best-effort normalization to KEBAB_RE's shape: lowercase, any run of
+    non [a-z0-9] characters (underscores, spaces, etc.) collapsed to a
+    single hyphen, leading/trailing hyphens stripped."""
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "untitled"
+
+
+def fix_slug_mismatches(area_root: Path, files: list[MemoryFile], rules: dict) -> list[str]:
+    """full_auto only, opt-in via auto_fix_slug_mismatch. Mirrors
+    checks.check_slug_hygiene's two signals: a frontmatter `name` that isn't
+    kebab-case, and/or one that doesn't match its own filename stem. The
+    frontmatter `name` is treated as the source of truth (it's already
+    required to read like a slug) — normalized to strict kebab-case first if
+    needed, then the file is renamed to `{name}.md` so both sides agree.
+
+    Skipped (not forced) whenever the computed target filename would collide
+    with another real file already on disk — picking a winner there is a
+    judgment call for a human, same philosophy as merge_exact_duplicates.
+    Every MEMORY.md href pointing at a renamed file is rewritten in the same
+    pass so the index never goes stale."""
+    if not rules.get("spec_conformance", {}).get("require_kebab_case_slug", True):
+        return []
+    existing_stems = {f.path.stem for f in files}
+    index_path = area_root / "MEMORY.md"
+    out = []
+    for f in files:
+        if f.parse_error or f.review_decision == "custom_format":
+            continue
+        name = f.frontmatter.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        canonical = name if KEBAB_RE.match(name) else _to_kebab_case(name)
+
+        if canonical != name:
+            f.frontmatter["name"] = canonical
+            _rewrite_body(f, f.body)
+            if canonical == f.path.stem:
+                out.append(f"normalized non-kebab name in {f.path.name} (was '{name}')")
+
+        if canonical == f.path.stem:
+            continue
+
+        new_path = f.path.with_name(f"{canonical}.md")
+        if new_path.exists() or canonical in existing_stems:
+            out.append(f"skipped slug fix for {f.path.name}: target '{canonical}.md' already "
+                       "exists — needs manual review")
+            continue
+
+        old_name = f.path.name
+        old_rel = f.path.relative_to(area_root).as_posix()
+        existing_stems.discard(f.path.stem)
+        f.path.rename(new_path)
+        f.path = new_path
+        existing_stems.add(canonical)
+        new_rel = new_path.relative_to(area_root).as_posix()
+
+        if index_path.exists():
+            text = index_path.read_text(encoding="utf-8")
+            updated = text.replace(f"]({old_rel})", f"]({new_rel})")
+            if updated != text:
+                index_path.write_text(updated, encoding="utf-8")
+
+        out.append(f"renamed {old_name} -> {new_path.name} (slug hygiene)")
     return out

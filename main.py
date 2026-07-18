@@ -11,7 +11,13 @@ from consolidate import write_canonical_file, write_pointer_stub
 from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
 from dryrun import create_dry_run_copy, diff_changed_files, diff_memory_index
-from fixer import add_missing_index_entries, mark_stale_files, merge_exact_duplicates, remove_dead_index_links
+from fixer import (
+    add_missing_index_entries,
+    fix_slug_mismatches,
+    mark_stale_files,
+    merge_exact_duplicates,
+    remove_dead_index_links,
+)
 from registry import (
     finding_decision_map,
     load_decisions,
@@ -44,6 +50,8 @@ def _apply_fixes(root: Path, files, index_entries, index_lines, rules: dict,
             actions += mark_stale_files(files, rules)
         if auto_cfg.get("auto_fix_merge_exact_duplicates", False):
             actions += merge_exact_duplicates(files, rules)
+        if auto_cfg.get("auto_fix_slug_mismatch", False):
+            actions += fix_slug_mismatches(root, files, rules)
     return actions
 
 
@@ -151,7 +159,7 @@ def cmd_dry_run(args) -> None:
     mode = auto_cfg.get("mode")
     flag_names = ["auto_fix_missing_index_entries", "auto_fix_broken_links"]
     if mode == "full_auto":
-        flag_names += ["auto_fix_mark_stale", "auto_fix_merge_exact_duplicates"]
+        flag_names += ["auto_fix_mark_stale", "auto_fix_merge_exact_duplicates", "auto_fix_slug_mismatch"]
     if not any(auto_cfg.get(f, False) for f in flag_names):
         print(f"No auto_fix_* flag applicable to automation.mode '{mode}' is enabled in rules.md — "
               "nothing would change. Enable at least one to preview its effect.")

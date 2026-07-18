@@ -3,7 +3,28 @@ so the real impact can be inspected — and diffed — before anything real is
 touched."""
 import difflib
 import shutil
+import time
 from pathlib import Path
+
+
+def _rmtree_with_retry(path: Path, attempts: int = 10, delay: float = 0.5) -> None:
+    """shutil.rmtree can hit a transient WinError 5 (Access is denied) right
+    after a previous run's shutil.copytree finished writing into this same
+    directory — confirmed in practice to be Windows Defender's real-time
+    scanner briefly holding a lock on just-written files. A short retry
+    clears it in every observed case; if it never clears, the final
+    exception still propagates so the caller gets a clear error instead of
+    silently hanging."""
+    last_exc = None
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:
+            last_exc = e
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    raise last_exc
 
 
 def create_dry_run_copy(area_root: Path, staging_dir: Path) -> Path:
@@ -25,7 +46,7 @@ def create_dry_run_copy(area_root: Path, staging_dir: Path) -> Path:
         )
 
     if staging_dir.exists():
-        shutil.rmtree(staging_dir)
+        _rmtree_with_retry(staging_dir)
     shutil.copytree(area_root, staging_dir)
     return staging_dir
 
