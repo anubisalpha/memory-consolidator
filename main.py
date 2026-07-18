@@ -599,20 +599,23 @@ def cmd_triage(args) -> None:
     print(f"Triage — '{area.name}': {total} finding(s) across {len(by_category)} "
           f"categor{'y' if len(by_category) == 1 else 'ies'} with no auto-fix.\n")
 
-    # Only 'full' mode areas get the interactive invalid_type fix: it writes
-    # to a real file, and the project convention is every write is preceded
-    # by a snapshot — for a 'scoped' area (root can be an entire workspace)
-    # that snapshot is exactly the expensive/risky full-tree copy main.py's
-    # cmd_audit deliberately no longer takes. Guidance-only stays safe there.
-    can_edit_invalid_type = (area.mode == "full" and not args.non_interactive
-                              and "invalid_type" in by_category)
+    # The interactive invalid_type fix writes to real files, and the project
+    # convention is every write is preceded by a snapshot. Unlike cmd_audit's
+    # full-area snapshot (skipped for 'scoped' areas — a whole workspace is
+    # too expensive/risky to copy wholesale), this only ever touches the
+    # specific file(s) with an invalid_type finding, so a *targeted* snapshot
+    # (create_targeted_snapshot) works safely in either 'full' or 'scoped'
+    # areas — same reasoning as resolve-conflicts' targeted snapshot.
+    can_edit_invalid_type = not args.non_interactive and "invalid_type" in by_category
     if can_edit_invalid_type:
         backup_dir = Path(rules["paths"]["backup_dir"])
         ensure_backup_safe_for_area(area, backup_dir)
-        print(f"Creating pre-edit snapshot of '{area.name}' before any triage fixes...", flush=True)
-        snap = create_snapshot(area.root, backup_dir, reason=f"pre-triage [{area.name}]",
-                                keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
-        print(f"Snapshot created: {snap}\n", flush=True)
+        touched = sorted({by_ref[f.ref].path for f in by_category["invalid_type"] if f.ref in by_ref})
+        if touched:
+            print(f"Creating pre-edit snapshot of {len(touched)} file(s) before any triage fixes...", flush=True)
+            snap = create_targeted_snapshot(touched, area.root, backup_dir, reason=f"pre-triage [{area.name}]",
+                                             keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
+            print(f"Snapshot created: {snap}\n", flush=True)
 
     for category in sorted(by_category):
         items = by_category[category]
