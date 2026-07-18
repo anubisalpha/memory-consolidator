@@ -6,13 +6,15 @@ any AI context window; it is only read by `main.py`.
 
 ```yaml
 paths:
-  # Absolute, outside claudecore entirely — claudecore-project's root IS the
-  # whole claudecore tree, so anything under "./backups" (relative to this
+  # Outside claudecore entirely — claudecore-project's root IS the whole
+  # claudecore tree, so anything under "./backups" (relative to this
   # rules.md, which lives inside claudecore) always conflicted with that
   # area's write safety check. Moved out once so apply_safe_fixes/
   # resolve-conflicts/rollback can actually run against claudecore-project.
-  backup_dir: "C:/Users/marca/.memory-consolidator-data/backups"
-  report_dir: "C:/Users/marca/.memory-consolidator-data/reports"
+  # "~" expands to the current user's home dir on any machine — do not
+  # hardcode an absolute per-user path here (this file is checked into git).
+  backup_dir: "~/.memory-consolidator-data/backups"
+  report_dir: "~/.memory-consolidator-data/reports"
 
 areas:
   # Each area is one root the tool audits independently (its own report, its
@@ -27,13 +29,13 @@ areas:
     root: null              # null = auto-detect on first run, then saved to config.local.json
     mode: full
   - name: claudecore-project
-    root: "C:/Users/marca/claudecore"
+    root: "../.."      # this project lives at claudecore/projects/memory-consolidator, so "../.." is claudecore's root
     mode: scoped
   - name: dot-claude
-    root: "C:/Users/marca/.claude"
+    root: "~/.claude"
     mode: scoped
   - name: memory-diverged
-    root: "C:/Users/marca/claudecore/memory-diverged"
+    root: "../../memory-diverged"    # i.e. claudecore/memory-diverged
     mode: full
     index_header: |
       # Memory Index — Consolidation Staging Area
@@ -105,10 +107,10 @@ external_scan:
   # something overly broad (e.g. never the common ancestor across areas —
   # that can balloon to the whole home directory and turn `map` into an
   # accidental full-disk walk).
-  workspace_root: "C:/Users/marca/claudecore"
+  workspace_root: "../.."    # i.e. claudecore's root — kept explicit since we have two scoped areas (ambiguous for auto-derive)
 
 automation:
-  mode: "report_only"        # report_only | apply_safe_fixes | full_auto
+  mode: "full_auto"        # report_only | apply_safe_fixes | full_auto
   # These two flags take effect in 'full' mode areas (a 'scoped' area has no
   # single MEMORY.md index to fix) under apply_safe_fixes/full_auto. Opt in
   # per flag.

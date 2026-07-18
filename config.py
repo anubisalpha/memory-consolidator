@@ -15,9 +15,11 @@ CONFIG_PATH = PROJECT_DIR / "config.local.json"
 def _claude_project_slug(path: Path) -> str:
     """Best-effort reconstruction of Claude Code's session-storage folder
     naming convention: a project's absolute path with separators (and the
-    drive letter's colon, on Windows) replaced by dashes. Works for any
-    user/home directory on any OS — this is only ever used as a guess with
-    an interactive prompt as the fallback, so it doesn't need to be exact."""
+    drive letter's colon, on Windows) replaced by dashes. This is only a
+    guess — the real slugging rule may differ by OS or change over time —
+    used with an interactive prompt/manual fallback, so it doesn't need to
+    be exact; a wrong guess just falls through to the next candidate or a
+    prompt rather than silently misconfiguring anything."""
     resolved = str(path.resolve())
     return resolved.replace(":", "").replace("\\", "-").replace("/", "-")
 
@@ -124,7 +126,8 @@ def resolve_areas(rules: dict, non_interactive: bool = False) -> list[ResolvedAr
 
         root_cfg = entry.get("root")
         if root_cfg:
-            root = Path(root_cfg).expanduser().resolve()
+            root_path = Path(root_cfg).expanduser()
+            root = root_path.resolve() if root_path.is_absolute() else (PROJECT_DIR / root_path).resolve()
             if not root.exists():
                 raise FileNotFoundError(f"area '{name}': root does not exist: {root}")
         else:
@@ -177,8 +180,10 @@ def get_config(non_interactive: bool = False) -> dict:
     rules = load_rules()
     areas = resolve_areas(rules, non_interactive=non_interactive)
 
-    rules["paths"]["backup_dir"] = str((PROJECT_DIR / rules["paths"]["backup_dir"]).resolve())
-    rules["paths"]["report_dir"] = str((PROJECT_DIR / rules["paths"]["report_dir"]).resolve())
+    backup_cfg = Path(rules["paths"]["backup_dir"]).expanduser()
+    report_cfg = Path(rules["paths"]["report_dir"]).expanduser()
+    rules["paths"]["backup_dir"] = str(backup_cfg.resolve() if backup_cfg.is_absolute() else (PROJECT_DIR / backup_cfg).resolve())
+    rules["paths"]["report_dir"] = str(report_cfg.resolve() if report_cfg.is_absolute() else (PROJECT_DIR / report_cfg).resolve())
     backup_dir = Path(rules["paths"]["backup_dir"])
     report_dir = Path(rules["paths"]["report_dir"])
 
@@ -193,10 +198,14 @@ def get_config(non_interactive: bool = False) -> dict:
     report_dir.mkdir(parents=True, exist_ok=True)
 
     ext_cfg = rules.get("external_scan") or {}
-    if ext_cfg.get("enabled", False) and not ext_cfg.get("workspace_root"):
-        derived = derive_workspace_root(areas)
-        if derived:
-            ext_cfg["workspace_root"] = str(derived)
+    if ext_cfg.get("enabled", False):
+        if ext_cfg.get("workspace_root"):
+            ws_path = Path(ext_cfg["workspace_root"]).expanduser()
+            ext_cfg["workspace_root"] = str(ws_path.resolve() if ws_path.is_absolute() else (PROJECT_DIR / ws_path).resolve())
+        else:
+            derived = derive_workspace_root(areas)
+            if derived:
+                ext_cfg["workspace_root"] = str(derived)
     rules["external_scan"] = ext_cfg
 
     rules["_resolved_areas"] = areas

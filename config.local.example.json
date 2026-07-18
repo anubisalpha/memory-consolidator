@@ -1,3 +1,4 @@
 {
+  "_comment": "Windows example: C:\\Users\\yourname\\.claude\\projects\\YOUR-PROJECT-DIR\\memory  |  macOS/Linux example: /home/yourname/.claude/projects/YOUR-PROJECT-DIR/memory",
   "area_root::claude-auto-memory": "C:\\Users\\yourname\\.claude\\projects\\YOUR-PROJECT-DIR\\memory"
 }
