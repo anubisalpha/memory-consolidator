@@ -4,6 +4,7 @@ from pathlib import Path
 
 from checks import Finding
 from crosscheck import CrossAreaFinding
+from guidance import guidance_for
 
 import sys
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -30,6 +31,11 @@ def print_console(findings: list[Finding], memory_root: Path, score: float | Non
         for f in findings:
             counts[f.severity] = counts.get(f.severity, 0) + 1
         print("\nSummary:", ", ".join(f"{k}={v}" for k, v in sorted(counts.items(), key=lambda kv: SEVERITY_ORDER[kv[0]])))
+
+        categories = sorted({f.category for f in findings})
+        print("\nWhat to do about it (one line per category present above):")
+        for category in categories:
+            print(f"  {category}: {guidance_for(category)}")
 
     if score is not None:
         print(f"\nSpec conformance score: {score:.1f}/100")
@@ -60,6 +66,8 @@ def write_markdown_report(findings: list[Finding], memory_root: Path, report_dir
     else:
         for category, items in by_category.items():
             lines.append(f"## {category} ({len(items)})")
+            lines.append("")
+            lines.append(f"_What to do: {guidance_for(category)}_")
             lines.append("")
             for f in items:
                 lines.append(f"- **{f.severity.upper()}** `{f.ref}` — {f.message}")

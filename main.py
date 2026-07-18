@@ -5,19 +5,21 @@ from datetime import date
 from pathlib import Path
 
 from backup import create_snapshot, create_targeted_snapshot, list_snapshots, restore_single_file, rollback
-from checks import compliance_score, find_duplicate_review_candidates, find_stale_review_candidates, run_all_checks
+from checks import CANONICAL_TYPES, _ref, compliance_score, find_duplicate_review_candidates, find_stale_review_candidates, run_all_checks
 from config import ResolvedArea, ensure_backup_safe_for_area, get_config
 from consolidate import write_canonical_file, write_pointer_stub
 from crosscheck import find_cross_area_duplicates, find_cross_area_slug_conflicts, find_overlapping_areas
 from discovery import discover_external_memory_files
 from dryrun import create_dry_run_copy, diff_changed_files, diff_memory_index
 from fixer import (
+    _rewrite_body,
     add_missing_index_entries,
     fix_slug_mismatches,
     mark_stale_files,
     merge_exact_duplicates,
     remove_dead_index_links,
 )
+from guidance import GUIDANCE, guidance_for
 from registry import (
     finding_decision_map,
     load_decisions,
@@ -563,6 +565,89 @@ def cmd_review_findings_forget(args) -> None:
         print(f"No decision found for '{args.key}' ({args.category}) in area '{area.name}'.")
 
 
+def cmd_triage(args) -> None:
+    """Walks through findings that have NO auto-fix (guidance.GUIDANCE's
+    categories only — anything auto-fixable, or already covered by
+    `review-findings`/`resolve-conflicts`, is deliberately excluded here so
+    there's exactly one place to go for each kind of finding). For
+    'invalid_type' specifically — the one guidance-only category with a
+    small enumerable answer set — offers to fix it right there instead of
+    just describing what to do."""
+    rules = get_config(non_interactive=args.non_interactive)
+    area = _select_area(rules, args.area)
+    if area.mode == "full":
+        files = scan_memory_files(area.root, area_name=area.name)
+        index_entries, index_lines = parse_index(area.root)
+    else:
+        files = scan_memory_files_scoped(area.root, rules.get("memory_file_patterns", []), area_name=area.name)
+        index_entries, index_lines = [], []
+
+    findings = run_all_checks(area.root, files, index_entries, index_lines, rules, mode=area.mode)
+    relevant = [f for f in findings if f.category in GUIDANCE]
+    if not relevant:
+        print(f"Nothing to triage in area '{area.name}' — no findings in a guidance-only category "
+              "(auto-fixable findings and duplicate/staleness judgment calls are handled by "
+              "`audit`/`review-findings` instead).")
+        return
+
+    by_category: dict[str, list] = {}
+    for f in relevant:
+        by_category.setdefault(f.category, []).append(f)
+    by_ref = {_ref(mf.path): mf for mf in files}
+
+    total = len(relevant)
+    print(f"Triage — '{area.name}': {total} finding(s) across {len(by_category)} "
+          f"categor{'y' if len(by_category) == 1 else 'ies'} with no auto-fix.\n")
+
+    # Only 'full' mode areas get the interactive invalid_type fix: it writes
+    # to a real file, and the project convention is every write is preceded
+    # by a snapshot — for a 'scoped' area (root can be an entire workspace)
+    # that snapshot is exactly the expensive/risky full-tree copy main.py's
+    # cmd_audit deliberately no longer takes. Guidance-only stays safe there.
+    can_edit_invalid_type = (area.mode == "full" and not args.non_interactive
+                              and "invalid_type" in by_category)
+    if can_edit_invalid_type:
+        backup_dir = Path(rules["paths"]["backup_dir"])
+        ensure_backup_safe_for_area(area, backup_dir)
+        print(f"Creating pre-edit snapshot of '{area.name}' before any triage fixes...", flush=True)
+        snap = create_snapshot(area.root, backup_dir, reason=f"pre-triage [{area.name}]",
+                                keep_last_n=rules.get("backup_retention", {}).get("keep_last_n"))
+        print(f"Snapshot created: {snap}\n", flush=True)
+
+    for category in sorted(by_category):
+        items = by_category[category]
+        print(f"=== {category} ({len(items)}) ===")
+        print(guidance_for(category))
+        print()
+
+        if category == "invalid_type" and can_edit_invalid_type:
+            valid = sorted(CANONICAL_TYPES)
+            for f in items:
+                print(f"  {f.ref}: {f.message}")
+                answer = input(f"    Pick a type [{'/'.join(valid)}] or Enter to skip, 'q' to quit: ").strip().lower()
+                if answer == "q":
+                    print("Stopping triage session.")
+                    return
+                if answer in valid:
+                    mf = by_ref.get(f.ref)
+                    if mf is None:
+                        print("    -> couldn't locate the file object for this finding, skipped")
+                        continue
+                    metadata = dict(mf.frontmatter.get("metadata") or {})
+                    metadata["type"] = answer
+                    mf.frontmatter["metadata"] = metadata
+                    _rewrite_body(mf, mf.body)
+                    print(f"    -> set metadata.type to '{answer}' in {mf.path.name}")
+                else:
+                    print("    -> skipped")
+        else:
+            for f in items:
+                print(f"  {f.ref}: {f.message}")
+        print()
+
+    print("Triage complete. Anything not fixed above still needs the guidance shown applied by hand.")
+
+
 def cmd_snapshot(args) -> None:
     rules = get_config(non_interactive=args.non_interactive)
     area = _select_area(rules, args.area)
@@ -663,6 +748,11 @@ def main() -> None:
     p_review_findings_forget.add_argument("category", choices=["duplicate", "stale"])
     p_review_findings_forget.add_argument("key", help="rel_path for 'stale'; 'a.md::b.md' (sorted) for 'duplicate'")
     p_review_findings_forget.set_defaults(func=cmd_review_findings_forget)
+
+    p_triage = sub.add_parser("triage", help="walk through findings with no auto-fix, one category at a time, "
+                               "with guidance and (for invalid_type) an interactive fix")
+    p_triage.add_argument("--area", default=None, help="required if multiple areas are configured")
+    p_triage.set_defaults(func=cmd_triage)
 
     p_snap = sub.add_parser("snapshot", help="manually snapshot an area's root")
     p_snap.add_argument("--area", default=None, help="required if multiple areas are configured")
